@@ -1,6 +1,6 @@
 import json
-import torch
 from typing import List, Dict, Any, Tuple
+import torch
 
 import numpy as np
 from datasets import Dataset
@@ -9,7 +9,7 @@ from transformers import (
     AutoModelForTokenClassification,
     TrainingArguments,
     Trainer,
-    DataCollatorForTokenClassification, TokenizersBackend,
+    DataCollatorForTokenClassification,
 )
 import evaluate
 
@@ -58,7 +58,6 @@ def build_label_list(examples: List[Dict[str, Any]]) -> List[str]:
 # ---------------------------
 
 def char_span_to_token_labels(
-    text: str,
     entities: List[Dict[str, Any]],
     offsets: List[Tuple[int, int]],
     label2id: Dict[str, int],
@@ -116,7 +115,6 @@ def tokenize_and_align_labels(batch, tokenizer, label2id):
         offsets = tokenized["offset_mapping"][i]
 
         token_labels = char_span_to_token_labels(
-            text=text,
             entities=entities,
             offsets=offsets,
             label2id=label2id,
@@ -205,7 +203,7 @@ def extract_spans_from_logits(
     if current is not None:
         spans.append(current)
 
-    # متن spanها را اضافه کن
+    # متن span ها را اضافه کن
     out = []
     for lab, s, e in spans:
         out.append({"label": lab, "start": s, "end": e, "span_text": text[s:e]})
@@ -271,7 +269,7 @@ def main():
         args=args,
         train_dataset=train_tok,
         eval_dataset=test_tok,
-        processing_class=tokenizer,
+        tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=lambda p: compute_metrics(p, id2label),
     )
