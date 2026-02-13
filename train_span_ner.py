@@ -21,7 +21,7 @@ MODEL_NAME = "bert-base-multilingual-cased"   # اگر مدل فارسی مثل 
 MAX_LENGTH = 256
 DATA_PATH = "data.jsonl"
 OUTPUT_DIR = "./job_ner_model"
-
+HF_TOKEN = "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"
 # ---------------------------
 # 2) خواندن دیتاست JSONL
 # ---------------------------
@@ -269,7 +269,7 @@ def main():
         args=args,
         train_dataset=train_tok,
         eval_dataset=test_tok,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=data_collator,
         compute_metrics=lambda p: compute_metrics(p, id2label),
     )
@@ -280,7 +280,9 @@ def main():
 
     # تست استخراج روی یک نمونه
     sample_text = raw[0]["text"]
+    device = next(model.parameters()).device  # یا torch.device("cuda")
     enc = tokenizer(sample_text, return_tensors="pt", truncation=True, max_length=MAX_LENGTH)
+    enc = {k: v.to(device) for k, v in enc.items()}
     with torch.no_grad():
         out = model(**enc)
     logits = out.logits[0].cpu().numpy()
