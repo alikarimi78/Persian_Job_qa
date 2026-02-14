@@ -217,7 +217,7 @@ def main():
         model=model,
         args=args,
         eval_dataset=test_tok,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=data_collator,
         compute_metrics=lambda p: compute_metrics(p, id2label),
     )
