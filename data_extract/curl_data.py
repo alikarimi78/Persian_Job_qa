@@ -1,6 +1,5 @@
-import json
 import time
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, List
 
 import pandas as pd
 import requests
