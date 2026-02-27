@@ -1,0 +1,45 @@
+conceptType,conceptUri,iscoGroup,preferredLabel,altLabels,hiddenLabels,status,modifiedDate,regulatedProfessionNote,scopeNote,definition,inScheme,description,code,naceCode,description_en
+Occupation,http://data.europa.eu/esco/occupation/00030d09-2b3a-4efd-87cc-c4ea39d27c34,2654,technical director,"director of technical arts
+technical supervisor
+head of technical
+technical and operations director
+technical manager
+head of technical department",,released,2024-01-25T11:28:50.295Z,http://data.europa.eu/esco/regulated-professions/unregulated,,,"http://data.europa.eu/esco/concept-scheme/member-occupations,
+http://data.europa.eu/esco/concept-scheme/occupations","Technical directors realise the artistic visions of the creators within technical constraints. They coordinate the operations of various production units, such as scene, wardrobe, sound and lighting, and make-up. They adapt the prototype and study the feasibility, implementation, operation and technical monitoring of the artistic project. They are also responsible for the stage equipment and technical equipment.",2654.1.7,http://data.europa.eu/ux2/nace2.1/9031,Show filters
+Occupation,http://data.europa.eu/esco/occupation/000e93a3-d956-4e45-aacb-f12c83fedf84,8121,metal drawing machine operator,"wire drawer
+forming machine operative
+draw machine operator
+metal drawing machine technician
+draw machine operative
+metal drawing machine operative
+wiredrawing setter
+wiredrawing machine tender
+draw machine technician
+wirer drawer machine operator
+forming machine technician",,released,2024-01-23T10:09:32.099Z,http://data.europa.eu/esco/regulated-professions/unregulated,,,"http://data.europa.eu/esco/concept-scheme/member-occupations,
+http://data.europa.eu/esco/concept-scheme/occupations","Metal drawing machine operators set up and operate drawing machines for ferrous and non-ferrous metal products, designed to provide wires, bars, pipes, hollow profiles and tubes with their specific form by reducing its cross-section and by pulling the working materials through a series of drawing dies.",8121.4,http://data.europa.eu/ux2/nace2.1/242,Show filters
+Occupation,http://data.europa.eu/esco/occupation/0019b951-c699-4191-8208-9822882d150c,7543,precision device inspector,"precision device quality control supervisor
+precision device quality assurance supervisor
+precision instrument quality control inspector
+precision instrument inspector
+precision instrument supervisor
+precision device QC inspector
+inspector of precision devices
+inspector of precision instruments
+precision device quality control inspector
+precision instrument QC inspector",,released,2024-01-25T15:00:12.188Z,http://data.europa.eu/esco/regulated-professions/unregulated,,,"http://data.europa.eu/esco/concept-scheme/member-occupations,
+http://data.europa.eu/esco/concept-scheme/occupations","Precision device inspectors make sure precision devices, such as micrometers and gauges, operate according to design specifications. They may adjust the precision devices and their components in case of any faults.",7543.10.3,http://data.europa.eu/ux2/nace2.1/2651,Show filters
+Occupation,http://data.europa.eu/esco/occupation/0022f466-426c-41a4-ac96-a235c945cf97,3155,air traffic safety technician,"air traffic safety electronics hardware specialist
+air traffic safety electronics technician
+air traffic safety electronics engineer
+air traffic safety electronics software specialist
+air traffic safety hardware specialist
+air traffic safety software specialist
+air traffic safety engineer",,released,2024-01-29T16:01:13.998Z,http://data.europa.eu/esco/regulated-professions/unregulated,,,"http://data.europa.eu/esco/concept-scheme/member-occupations,
+http://data.europa.eu/esco/concept-scheme/occupations","Air traffic safety technicians provide technical support regarding the safety of air traffic control and navigation systems. They design, maintain, install and operate these systems both in the airport and on board the aeroplane according to regulations.",3155.1,http://data.europa.eu/ux2/nace2.1/5223,Show filters
+Occupation,http://data.europa.eu/esco/occupation/002da35b-7808-43f3-83bf-63596b8b351f,2431,hospitality revenue manager,"yield manager
+hospitality yields manager
+hospitality revenues manager
+revenue manager",,released,2024-01-11T10:28:45.871Z,http://data.europa.eu/esco/regulated-professions/unregulated,,,"http://data.europa.eu/esco/concept-scheme/member-occupations,
+http://data.europa.eu/esco/concept-scheme/occupations","Hospitality revenue managers maximise revenue generated from facilities such as hotels, holiday resorts and camping grounds by analysing trends and competition. They assist establishment managers in strategic decisions. Hospitality revenue managers analyse and optimise the financial potential of facilities and manage the corresponding staff.",2431.9,"http://data.europa.eu/ux2/nace2.1/701,
+http://data.europa.eu/ux2/nace2.1/55",Show filters

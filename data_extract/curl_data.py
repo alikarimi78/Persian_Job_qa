@@ -57,65 +57,6 @@ def pick_lang_value(v: Any, lang: str = "en") -> Optional[str]:
     return None
 
 
-def iter_nodes(jsonld: Any) -> List[Dict[str, Any]]:
-    """
-    Normalize JSON-LD into a list of nodes.
-    """
-    nodes: List[Dict[str, Any]] = []
-    if isinstance(jsonld, dict):
-        if "@graph" in jsonld and isinstance(jsonld["@graph"], list):
-            nodes.extend([n for n in jsonld["@graph"] if isinstance(n, dict)])
-        else:
-            nodes.append(jsonld)
-    elif isinstance(jsonld, list):
-        for item in jsonld:
-            if isinstance(item, dict) and "@graph" in item:
-                nodes.extend([n for n in item["@graph"] if isinstance(n, dict)])
-            elif isinstance(item, dict):
-                nodes.append(item)
-    return nodes
-
-
-def extract_description_from_jsonld(jsonld: Any, lang: str = "en") -> Optional[str]:
-    """
-    Try common keys for description/definition in ESCO JSON-LD.
-    """
-    candidates = [
-        "skos:definition",
-        "http://www.w3.org/2004/02/skos/core#definition",
-        "definition",
-        "dct:description",
-        "http://purl.org/dc/terms/description",
-        "description",
-    ]
-    for node in iter_nodes(jsonld):
-        for key in candidates:
-            if key in node:
-                val = pick_lang_value(node.get(key), lang=lang)
-                if val:
-                    return val
-    return None
-
-
-def fetch_jsonld_description(session: requests.Session, uri: str, lang: str = "en", timeout: int = 30) -> Optional[str]:
-    """
-    Ask the ESCO URI for JSON-LD via Accept header.
-    """
-    headers = {"Accept": "application/ld+json, application/json;q=0.9, */*;q=0.1"}
-    r = session.get(uri, headers=headers, timeout=timeout, allow_redirects=True)
-    if r.status_code >= 400 or not r.text:
-        return None
-    # Some servers return JSON with wrong content-type; be permissive.
-    try:
-        data = r.json()
-    except Exception:
-        try:
-            data = json.loads(r.text)
-        except Exception:
-            return None
-    return extract_description_from_jsonld(data, lang=lang)
-
-
 def scrape_html_description(session: requests.Session, url: str, timeout: int = 30) -> Optional[str]:
     """
     Fallback: scrape HTML meta/sections. This is heuristic and may need tuning.
@@ -158,7 +99,6 @@ def scrape_html_description(session: requests.Session, url: str, timeout: int = 
             joined = " ".join(parts).strip()
             if joined:
                 return joined
-
     # 3) last resort: first meaningful paragraph
     p = soup.find("p")
     if p:
@@ -207,12 +147,7 @@ def main(
 
         desc = None
         if uri:
-            # Preferred: JSON-LD from the URI
-            desc = fetch_jsonld_description(session, uri, lang=lang)
-
-            # Fallback: HTML scraping
-            if not desc:
-                desc = scrape_html_description(session, uri)
+            desc = scrape_html_description(session, uri)
 
         descriptions.append(desc or "")
 
@@ -228,4 +163,4 @@ def main(
 if __name__ == "__main__":
     # مثال اجرا:
     # main("occupations_en.csv", out_csv_path="occupations_with_description_en.csv", sleep_seconds=0.3)
-    main("occupations_en.csv")
+    main("data_csv_esco/occupations_en.csv")
