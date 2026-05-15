@@ -1,0 +1,8 @@
+phase 1 (still here)
+    1) save the output files
+        1.1) embeding and datagrame : sample_jobs.xlsx, job_embeddings.npy , job_search_phase1.py
+
+
+ phase 2:
+    1) save the outputfiles:
+        1.1) sample_jobs.xlsx, processed_jobs.pkl, job_embeddings.npy, metadata.json, job_search_phase1.py
