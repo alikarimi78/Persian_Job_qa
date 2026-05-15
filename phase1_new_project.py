@@ -738,38 +738,37 @@ def answer_question(question, df, embeddings, model):
 # 8) Main
 # =========================
 def main():
-    def main():
-        file_path = "sample_jobs.xlsx"
+    file_path = "sample_jobs.xlsx"
 
-        # todo: اگر فایل نمونه دوباره ساخته شود
-        generate_sample_excel(file_path)
+    # todo: اگر فایل نمونه دوباره ساخته شود
+    generate_sample_excel(file_path)
 
-        df = load_jobs_data(file_path)
+    df = load_jobs_data(file_path)
 
-        model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+    model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 
-        embeddings = get_job_embeddings(
-            df,
-            model,
-            embeddings_path="job_embeddings.npy",
-            force_rebuild=True  # چون ساختار داده عوض شده
-        )
+    embeddings = get_job_embeddings(
+        df,
+        model,
+        embeddings_path="job_embeddings.npy",
+        force_rebuild=True  # چون ساختار داده عوض شده
+    )
 
-        print("✅ System is ready. Type your question (or 'exit').")
+    print("✅ System is ready. Type your question (or 'exit').")
 
-        while True:
-            question = input("\n❓ سوال: ").strip()
-            if question.lower() in ["exit", "quit", "خروج"]:
-                break
+    while True:
+        question = input("\n❓ سوال: ").strip()
+        if question.lower() in ["exit", "quit", "خروج"]:
+            break
 
-            result = answer_question(question, df, embeddings, model)
+        result = answer_question(question, df, embeddings, model)
 
-            print("\n------------------------------")
-            print(f"🎯 Intent: {result['intent']}")
-            print(f"🔎 Matched Job: {result['matched_job']}")
-            print(f"📊 Score: {result['score']:.4f}")
-            print(result["response"])
-            print("------------------------------")
+        print("\n------------------------------")
+        print(f"🎯 Intent: {result['intent']}")
+        print(f"🔎 Matched Job: {result['matched_job']}")
+        print(f"📊 Score: {result['score']:.4f}")
+        print(result["response"])
+        print("------------------------------")
 
 if __name__ == "__main__":
     main()
