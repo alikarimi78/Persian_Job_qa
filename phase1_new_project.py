@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+from transformers import pipeline
 
 try:
     from hazm import Normalizer
@@ -35,54 +36,33 @@ def normalize_text(text):
 
 
 # =========================
-# 2) Intent Detection
+# 2) Intent Detection (نسخه هوشمند با HuggingFace)
 # =========================
-def detect_intent(question):
-    q = question.strip().lower()
+def detect_intent(question, classifier):
+    q = question.strip()
 
-    intro_keywords = [
-        "معرفی", "چیست", "چیه", "کیست", "شغل", "نقش", "وظیفه این شغل", "درباره شغل"
-    ]
-    responsibility_keywords = [
-        "وظایف", "مسئولیت", "کارها", "چه کار", "چه کاری", "کارهایی"
-    ]
-    competency_keywords = [
-        "شایستگی", "مهارت", "مهارت‌ها", "برای ارتقا", "برای پیشرفت", "ارتقا", "پیشرفت"
-    ]
-    tools_keywords = [
-        "ابزار", "ابزارها", "نرم افزار", "نرم‌افزار", "software", "tool", "tools"
-    ]
-    career_keywords = [
-        "مسیر شغلی", "گام بعدی", "ارتقای شغلی", "بعد از", "رشد شغلی", "آینده شغلی"
-    ]
-    context_keywords = [
-        "محیط کاری", "کارگاه", "کارخانه", "دفتر", "پروژه", "محیط کار"
-    ]
-    level_keywords = [
-        "سطح", "مدیر", "مدیریتی", "کارشناس", "کارشناس ارشد", "سرپرست"
-    ]
-    department_keywords = [
-        "دپارتمان", "واحد", "بخش", "department"
-    ]
+    # دیکشنری نگاشت: برچسب‌های فارسی به کلیدهای سیستم
+    intent_mapping = {
+        "معرفی و شرح کلی شغل": "description",
+        "وظایف و مسئولیت‌های روزمره": "responsibilities",
+        "شایستگی‌ها، مهارت‌ها و توانمندی‌ها": "competencies",
+        "ابزارها و نرم‌افزارهای مورد نیاز": "tools",
+        "مسیر ارتقا شغلی و آینده": "career_path",
+        "محیط کاری و فضای کار": "work_context",
+        "سطح شغلی و جایگاه سازمانی": "level",
+        "دپارتمان و بخش سازمانی": "department"
+    }
 
-    if any(k in q for k in career_keywords):
-        return "career_path"
-    if any(k in q for k in tools_keywords):
-        return "tools"
-    if any(k in q for k in competency_keywords):
-        return "competencies"
-    if any(k in q for k in responsibility_keywords):
-        return "responsibilities"
-    if any(k in q for k in context_keywords):
-        return "work_context"
-    if any(k in q for k in level_keywords):
-        return "level"
-    if any(k in q for k in department_keywords):
-        return "department"
-    if any(k in q for k in intro_keywords):
-        return "description"
+    candidate_labels = list(intent_mapping.keys())
 
-    return "description"
+    # مدل Zero-Shot بررسی می‌کند که جمله کاربر به کدام یک از این لیبل‌ها تعلق دارد
+    result = classifier(q, candidate_labels)
+
+    # استخراج بهترین لیبل (ایندکس صفر همیشه بالاترین امتیاز را دارد)
+    best_label = result['labels'][0]
+
+    # برگرداندن کلید انگلیسی معادل
+    return intent_mapping[best_label]
 
 
 # =========================
@@ -736,28 +716,26 @@ def format_job_response(job_row, intent):
     return f"📌 شغل: {title}\n\n{job_row.get('description', 'اطلاعاتی موجود نیست.')}"
 
 
-def answer_question(question, df, embeddings_dict, model, threshold=threshold_value):
+def answer_question(question, df, embeddings_dict, model, classifier, threshold=threshold_value):
     clean_question = normalize_text(question)
-    intent = detect_intent(clean_question)
+
+    # استفاده از classifier جدید
+    intent = detect_intent(clean_question, classifier)
 
     question_embedding = model.encode([clean_question])
 
-    # انتخاب فضای جستجوی مناسب بر اساس Intent
-    # اگر Intent جزو کلیدهای ما نبود (مثل work_context)، از general استفاده کن
     target_embeddings = embeddings_dict.get(intent, embeddings_dict["general"])
-
     similarities = cosine_similarity(question_embedding, target_embeddings)[0]
 
     best_idx = similarities.argmax()
     score = similarities[best_idx]
 
-    # منطق Threshold
     if score < threshold:
         return {
             "intent": "out_of_domain",
             "matched_job": "نامشخص",
             "score": float(score),
-            "response": "متاسفانه من اطلاعاتی درباره این موضوع ندارم. لطفاً سوالتون رو درباره مشاغل موجود بپرسید (مثلاً: وظایف کارشناس منابع انسانی چیست؟ یا ابزارهای حسابدار رو بگو)."
+            "response": "متاسفانه من اطلاعاتی درباره این موضوع ندارم. لطفاً سوالتون رو درباره مشاغل موجود بپرسید."
         }
 
     best_job = df.iloc[best_idx]
@@ -775,19 +753,23 @@ def answer_question(question, df, embeddings_dict, model, threshold=threshold_va
 # =========================
 def main():
     file_path = "sample_jobs.xlsx"
-
-    # todo: اگر فایل نمونه دوباره ساخته شود
     generate_sample_excel(file_path)
-
     df = load_jobs_data(file_path)
 
+    # 1. لود مدل Embedding
+    print("⏳ Loading Embedding Model...")
     model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 
-    embeddings = get_job_embeddings(
+    # 2. لود مدل Zero-Shot Classification (فقط بار اول دانلود می‌شود)
+    print("⏳ Loading Zero-Shot Classifier (This might take a moment)...")
+    classifier = pipeline("zero-shot-classification", model="MoritzLaurer/mDeBERTa-v3-base-mnli-xnli")
+
+    # 3. ساخت یا لود بردارها
+    embeddings_dict = get_job_embeddings(
         df,
         model,
-        embeddings_path="job_embeddings.npz",  # تغییر پسوند
-        force_rebuild=True
+        embeddings_path="job_embeddings.npz",
+        force_rebuild=False
     )
 
     print("✅ System is ready. Type your question (or 'exit').")
@@ -797,7 +779,8 @@ def main():
         if question.lower() in ["exit", "quit", "خروج"]:
             break
 
-        result = answer_question(question, df, embeddings, model)
+        # ارسال classifier به تابع
+        result = answer_question(question, df, embeddings_dict, model, classifier)
 
         print("\n------------------------------")
         print(f"🎯 Intent: {result['intent']}")
@@ -805,6 +788,5 @@ def main():
         print(f"📊 Score: {result['score']:.4f}")
         print(result["response"])
         print("------------------------------")
-
 if __name__ == "__main__":
     main()
