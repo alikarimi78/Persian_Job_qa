@@ -11,6 +11,11 @@ try:
 except:
     normalizer = None
 
+# =========================
+# 0) env
+# =========================
+threshold_value = 0.40
+
 
 # =========================
 # 1) Normalization
@@ -20,8 +25,7 @@ def normalize_text(text):
         return ""
     text = str(text).strip()
 
-    # basic cleanup
-    text = text.replace("\u200c", " ")  # نیم‌فاصله
+    # فقط فاصله‌های اضافی (دو تا اسپیس و بیشتر) رو تبدیل به یک اسپیس می‌کنیم
     text = re.sub(r"\s+", " ", text)
 
     if normalizer:
@@ -634,20 +638,36 @@ def load_jobs_data(file_path="sample_jobs.xlsx"):
 # =========================
 # 5) Build Embeddings
 # =========================
-def get_job_embeddings(df, model, embeddings_path="job_embeddings.npy", force_rebuild=False):
+def get_job_embeddings(df, model, embeddings_path="job_embeddings.npz", force_rebuild=False):
     if os.path.exists(embeddings_path) and not force_rebuild:
-        embeddings = np.load(embeddings_path)
-        if len(embeddings) == len(df):
-            print("✅ Loaded existing embeddings from file.")
-            return embeddings
+        data = np.load(embeddings_path)
+        # تبدیل فایل npz به یک دیکشنری از آرایه‌های numpy
+        embeddings_dict = {key: data[key] for key in data.files}
+
+        # چک کردن اینکه آیا تعداد رکوردها با دیتافریم همخوانی دارد یا خیر
+        if len(embeddings_dict["general"]) == len(df):
+            print("✅ Loaded existing separated embeddings from file.")
+            return embeddings_dict
         else:
             print("⚠️ Embeddings count mismatch. Rebuilding embeddings...")
 
-    print("⏳ Building embeddings...")
-    embeddings = model.encode(df["combined_text"].tolist(), show_progress_bar=True)
-    np.save(embeddings_path, embeddings)
-    print("✅ Embeddings saved.")
-    return embeddings
+    print("⏳ Building separated embeddings (This might take a minute)...")
+
+    # برای بخش شایستگی‌ها، ترکیبی از مهارت‌های نرم، سخت و شایستگی می‌سازیم
+    df["combined_skills"] = df["hard_skills"] + " " + df["soft_skills"] + " " + df["competencies"]
+
+    embeddings_dict = {
+        "general": model.encode(df["combined_text"].tolist(), show_progress_bar=False),
+        "description": model.encode(df["description"].tolist(), show_progress_bar=False),
+        "responsibilities": model.encode(df["responsibilities"].tolist(), show_progress_bar=False),
+        "competencies": model.encode(df["combined_skills"].tolist(), show_progress_bar=False),
+        "tools": model.encode(df["tools"].tolist(), show_progress_bar=False),
+    }
+
+    # ذخیره تمام آرایه‌ها در یک فایل با استفاده از savez
+    np.savez(embeddings_path, **embeddings_dict)
+    print("✅ Separated embeddings saved.")
+    return embeddings_dict
 
 # =========================
 # 6) Search
@@ -715,16 +735,32 @@ def format_job_response(job_row, intent):
 
     return f"📌 شغل: {title}\n\n{job_row.get('description', 'اطلاعاتی موجود نیست.')}"
 
-def answer_question(question, df, embeddings, model):
-    intent = detect_intent(question)
 
-    question_embedding = model.encode([question])
-    similarities = cosine_similarity(question_embedding, embeddings)[0]
+def answer_question(question, df, embeddings_dict, model, threshold=threshold_value):
+    clean_question = normalize_text(question)
+    intent = detect_intent(clean_question)
+
+    question_embedding = model.encode([clean_question])
+
+    # انتخاب فضای جستجوی مناسب بر اساس Intent
+    # اگر Intent جزو کلیدهای ما نبود (مثل work_context)، از general استفاده کن
+    target_embeddings = embeddings_dict.get(intent, embeddings_dict["general"])
+
+    similarities = cosine_similarity(question_embedding, target_embeddings)[0]
+
     best_idx = similarities.argmax()
-
-    best_job = df.iloc[best_idx]
     score = similarities[best_idx]
 
+    # منطق Threshold
+    if score < threshold:
+        return {
+            "intent": "out_of_domain",
+            "matched_job": "نامشخص",
+            "score": float(score),
+            "response": "متاسفانه من اطلاعاتی درباره این موضوع ندارم. لطفاً سوالتون رو درباره مشاغل موجود بپرسید (مثلاً: وظایف کارشناس منابع انسانی چیست؟ یا ابزارهای حسابدار رو بگو)."
+        }
+
+    best_job = df.iloc[best_idx]
     response = format_job_response(best_job, intent)
 
     return {
@@ -750,8 +786,8 @@ def main():
     embeddings = get_job_embeddings(
         df,
         model,
-        embeddings_path="job_embeddings.npy",
-        force_rebuild=True  # چون ساختار داده عوض شده
+        embeddings_path="job_embeddings.npz",  # تغییر پسوند
+        force_rebuild=True
     )
 
     print("✅ System is ready. Type your question (or 'exit').")
