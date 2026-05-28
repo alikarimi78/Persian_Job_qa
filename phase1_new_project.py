@@ -678,52 +678,45 @@ def search_jobs(query, df, model, embeddings, top_k=3):
 # =========================
 # 7) Format Answer
 # =========================
-def format_job_response(job_row, intent):
-    title = job_row.get("job_title", "")
+def generate_smart_response(user_question, job_row, llm_generator):
+    # ساخت کانتکست غنی از دیتابیس
+    context = f"""
+    عنوان شغل: {job_row.get('job_title', '')}
+    شرح شغل: {job_row.get('description', '')}
+    وظایف اصلی: {job_row.get('responsibilities', '')}
+    مهارت‌های سخت: {job_row.get('hard_skills', '')}
+    مهارت‌های نرم: {job_row.get('soft_skills', '')}
+    ابزارهای مورد نیاز: {job_row.get('tools', '')}
+    محیط کاری: {job_row.get('work_context', '')}
+    مسیر ارتقا شغلی: {job_row.get('career_path_next', '')}
+    """
 
-    if intent == "description":
-        return f"📌 شغل: {title}\n\n{job_row.get('description', 'اطلاعاتی موجود نیست.')}"
+    # طراحی پرامپت (Prompt Engineering)
+    messages = [
+        {"role": "system",
+         "content": "شما یک مشاور شغلی متخصص و حرفه‌ای هستید. وظیفه شما پاسخ به سوالات کاربران بر اساس اطلاعات داده شده است. اگر اطلاعات در متن نبود، مستقیما بگویید در اطلاعات فعلی موجود نیست و از خودتان چیزی نسازید. لحن شما باید دوستانه، خوانا و ساختاریافته باشد."},
+        {"role": "user", "content": f"با توجه به اطلاعات زیر:\n{context}\n\nبه این سوال پاسخ بده: {user_question}"}
+    ]
 
-    elif intent == "responsibilities":
-        return f"📌 وظایف شغل {title}:\n\n{job_row.get('responsibilities', 'اطلاعاتی موجود نیست.')}"
+    # تولید پاسخ توسط مدل
+    # این فرمت مخصوص مدل‌های Chat/Instruct مثل Qwen و Llama است
+    outputs = llm_generator(
+        messages,
+        max_new_tokens=300,
+        temperature=0.7,  # مقداری خلاقیت در لحن بیان، ولی حفظ ساختار
+        do_sample=True
+    )
 
-    elif intent == "competencies":
-        hard_skills = job_row.get("hard_skills", "")
-        soft_skills = job_row.get("soft_skills", "")
-        competencies = job_row.get("competencies", "")
-        return (
-            f"📌 شایستگی‌ها و مهارت‌های موردنیاز برای {title}:\n\n"
-            f"مهارت‌های سخت: {hard_skills}\n"
-            f"مهارت‌های نرم: {soft_skills}\n\n"
-            f"توضیح تکمیلی: {competencies}"
-        )
-
-    elif intent == "tools":
-        return f"📌 ابزارهای مورد استفاده در شغل {title}:\n\n{job_row.get('tools', 'اطلاعاتی موجود نیست.')}"
-
-    elif intent == "career_path":
-        return f"📌 مسیر شغلی بعدی برای {title}:\n\n{job_row.get('career_path_next', 'اطلاعاتی موجود نیست.')}"
-
-    elif intent == "work_context":
-        return f"📌 محیط کاری شغل {title}:\n\n{job_row.get('work_context', 'اطلاعاتی موجود نیست.')}"
-
-    elif intent == "level":
-        return f"📌 سطح شغلی {title}:\n\n{job_row.get('level', 'اطلاعاتی موجود نیست.')}"
-
-    elif intent == "department":
-        return f"📌 دپارتمان/واحد شغل {title}:\n\n{job_row.get('department', 'اطلاعاتی موجود نیست.')}"
-
-    return f"📌 شغل: {title}\n\n{job_row.get('description', 'اطلاعاتی موجود نیست.')}"
+    # استخراج متن تولید شده
+    generated_text = outputs[0]["generated_text"][-1]["content"]
+    return generated_text.strip()
 
 
-def answer_question(question, df, embeddings_dict, model, classifier, threshold=threshold_value):
+def answer_question(question, df, embeddings_dict, model, classifier, llm_generator, threshold=threshold_value):
     clean_question = normalize_text(question)
-
-    # استفاده از classifier جدید
     intent = detect_intent(clean_question, classifier)
 
     question_embedding = model.encode([clean_question])
-
     target_embeddings = embeddings_dict.get(intent, embeddings_dict["general"])
     similarities = cosine_similarity(question_embedding, target_embeddings)[0]
 
@@ -735,17 +728,19 @@ def answer_question(question, df, embeddings_dict, model, classifier, threshold=
             "intent": "out_of_domain",
             "matched_job": "نامشخص",
             "score": float(score),
-            "response": "متاسفانه من اطلاعاتی درباره این موضوع ندارم. لطفاً سوالتون رو درباره مشاغل موجود بپرسید."
+            "response": "متاسفانه اطلاعاتی در دیتابیس من درباره این موضوع وجود ندارد."
         }
 
     best_job = df.iloc[best_idx]
-    response = format_job_response(best_job, intent)
+
+    # --- تولید پاسخ با هوش مصنوعی ---
+    smart_response = generate_smart_response(question, best_job, llm_generator)
 
     return {
         "intent": intent,
         "matched_job": best_job["job_title"],
         "score": float(score),
-        "response": response
+        "response": smart_response
     }
 
 # =========================
@@ -756,21 +751,21 @@ def main():
     generate_sample_excel(file_path)
     df = load_jobs_data(file_path)
 
-    # 1. لود مدل Embedding
     print("⏳ Loading Embedding Model...")
     model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 
-    # 2. لود مدل Zero-Shot Classification (فقط بار اول دانلود می‌شود)
-    print("⏳ Loading Zero-Shot Classifier (This might take a moment)...")
+    print("⏳ Loading Zero-Shot Classifier...")
     classifier = pipeline("zero-shot-classification", model="MoritzLaurer/mDeBERTa-v3-base-mnli-xnli")
 
-    # 3. ساخت یا لود بردارها
-    embeddings_dict = get_job_embeddings(
-        df,
-        model,
-        embeddings_path="job_embeddings.npz",
-        force_rebuild=False
+    # --- اضافه شدن مدل زبانی تولید متن (LLM) ---
+    print("⏳ Loading Text Generation LLM (Qwen-1.5B)...")
+    llm_generator = pipeline(
+        "text-generation",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
+        device_map="auto" # اگر کارت گرافیک داری خودش میندازه روی GPU
     )
+
+    embeddings_dict = get_job_embeddings(df, model, embeddings_path="job_embeddings.npz")
 
     print("✅ System is ready. Type your question (or 'exit').")
 
@@ -779,13 +774,14 @@ def main():
         if question.lower() in ["exit", "quit", "خروج"]:
             break
 
-        # ارسال classifier به تابع
-        result = answer_question(question, df, embeddings_dict, model, classifier)
+        # ارسال llm_generator به تابع پاسخ‌دهی
+        result = answer_question(question, df, embeddings_dict, model, classifier, llm_generator)
 
         print("\n------------------------------")
         print(f"🎯 Intent: {result['intent']}")
         print(f"🔎 Matched Job: {result['matched_job']}")
         print(f"📊 Score: {result['score']:.4f}")
+        print("\n🤖 پاسخ هوشمند:")
         print(result["response"])
         print("------------------------------")
 if __name__ == "__main__":
