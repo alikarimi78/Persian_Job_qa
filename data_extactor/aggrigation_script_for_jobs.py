@@ -4,7 +4,7 @@ import pandas as pd
 # مسیر فولدر فایل‌ها (اگر اسکریپت بیرون پوشه است، نام پوشه را بنویسید)
 FOLDER_PATH = "./dataset_jobs"
 
-def load_and_aggregate(file_name, groupby_col, target_col, join_str="، "):
+def load_and_aggregate(file_name, groupby_col, target_col, join_str=", "):
     """توابع کمکی برای لود کردن و تجمیع متون چندخطی مربوط به یک شغل"""
     file_path = os.path.join(FOLDER_PATH, file_name)
     if not os.path.exists(file_path):
