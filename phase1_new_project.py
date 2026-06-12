@@ -16,8 +16,8 @@ except ImportError:
 # =========================
 # 0) Environment Variables
 # =========================
-threshold_value = 0.40
-
+threshold_value = 0.25
+smart_indent_detection = False
 
 # =========================
 # 1) Text Normalization
@@ -42,29 +42,49 @@ def normalize_text(text):
 def detect_intent(question, classifier):
     q = question.strip()
 
-    # Mapping dictionary: Persian labels to system keys
-    intent_mapping = {
-        "معرفی و شرح کلی شغل": "description",
-        "وظایف و مسئولیت‌های روزمره": "responsibilities",
-        "شایستگی‌ها، مهارت‌ها و توانمندی‌ها": "competencies",
-        "ابزارها و نرم‌افزارهای مورد نیاز": "tools",
-        "مسیر ارتقا شغلی و آینده": "career_path",
-        "محیط کاری و فضای کار": "work_context",
-        "سطح شغلی و جایگاه سازمانی": "level",
-        "دپارتمان و بخش سازمانی": "department"
-    }
+    if smart_indent_detection:
+        # Mapping dictionary: Persian labels to system keys
+        intent_mapping = {
+            "معرفی و شرح کلی شغل": "description",
+            "وظایف و مسئولیت‌های روزمره": "responsibilities",
+            "شایستگی‌ها، مهارت‌ها و توانمندی‌ها": "competencies",
+            "ابزارها و نرم‌افزارهای مورد نیاز": "tools",
+            "مسیر ارتقا شغلی و آینده": "career_path",
+            "محیط کاری و فضای کار": "work_context",
+            "سطح شغلی و جایگاه سازمانی": "level",
+            "دپارتمان و بخش سازمانی": "department"
+        }
 
-    candidate_labels = list(intent_mapping.keys())
+        candidate_labels = list(intent_mapping.keys())
 
-    # Zero-Shot model predicts the most relevant label for the user's query
-    result = classifier(q, candidate_labels)
+        # Zero-Shot model predicts the most relevant label for the user's query
+        result = classifier(q, candidate_labels)
 
-    # Extract the best label (index 0 always holds the highest score)
-    best_label = result['labels'][0]
+        # Extract the best label (index 0 always holds the highest score)
+        best_label = result['labels'][0]
 
-    # Return the equivalent English key for the system
-    return intent_mapping[best_label]
+        # Return the equivalent English key for the system
+        return intent_mapping[best_label]
 
+    else:
+        intent_keywords = {
+            "responsibilities": ["وظایف", "وظیفه", "مسئولیت", "روزمره", "کارها", "چه کاری", "چیکار"],
+            "tools": ["ابزار", "نرم‌افزار", "برنامه", "تجهیزات", "سیستم", "با چی"],
+            "competencies": ["مهارت", "شایستگی", "توانایی", "توانمندی", "ویژگی", "دقت", "استعداد", "نیاز", "باید بلد"],
+            "career_path": ["ارتقا", "آینده", "پیشرفت", "مسیر", "بعدش", "ترفیع", "رشد"],
+            "work_context": ["محیط", "فضا", "شرایط کاری", "کجا کار", "محل"],
+            "level": ["سطح", "جایگاه", "رده", "سنیور", "جونیور"],
+            "department": ["دپارتمان", "بخش", "واحد", "تیم"],
+            "description": ["معرفی", "شرح", "چیست", "توضیح", "درباره", "چیه"]
+        }
+
+        for intent, keywords in intent_keywords.items():
+            for keyword in keywords:
+                if keyword in q:
+                    return intent
+
+        # اگر هیچ‌کدام نبود، برگرداندن همان general برای جستجو در کل دیتا
+        return "general"
 
 # =========================
 # 3) Load & Prepare Data
