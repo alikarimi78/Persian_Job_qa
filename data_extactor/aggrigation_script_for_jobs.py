@@ -41,8 +41,8 @@ def main():
     })
 
     # ۲. استخراج نام‌های مستعار (Aliases)
-    aliases_df = load_and_aggregate("Sample of Reported Titles.xlsx", "O*NET-SOC Code", "Reported Title")
-    final_df = final_df.merge(aliases_df, on="O*NET-SOC Code", how="left").rename(columns={"Reported Title": "aliases"})
+    aliases_df = load_and_aggregate("Sample of Reported Titles.xlsx", "O*NET-SOC Code", "Reported Job Title")
+    final_df = final_df.merge(aliases_df, on="O*NET-SOC Code", how="left").rename(columns={"Reported Job Title": "aliases"})
 
     # ۳. استخراج وظایف و مسئولیت‌ها (Responsibilities)
     tasks_df = load_and_aggregate("Task Statements.xlsx", "O*NET-SOC Code", "Task", join_str=" | ")
@@ -58,8 +58,8 @@ def main():
 
     # ۵. استخراج ابزارهای نرم‌افزاری (Tools)
     # در O*NET 30.3 ستون ابزار معمولا Example یا Commodity Title نام دارد
-    tools_df = load_and_aggregate("Software Skills.xlsx", "O*NET-SOC Code", "Example")
-    final_df = final_df.merge(tools_df, on="O*NET-SOC Code", how="left").rename(columns={"Example": "tools"})
+    tools_df = load_and_aggregate("Software Skills.xlsx", "O*NET-SOC Code", "Workplace Example")
+    final_df = final_df.merge(tools_df, on="O*NET-SOC Code", how="left").rename(columns={"Workplace Example": "tools"})
 
     # ۶. استخراج مهارت‌ها (Skills)
     skills_df = load_and_aggregate("Essential Skills.xlsx", "O*NET-SOC Code", "Element Name")
