@@ -17,7 +17,6 @@ except ImportError:
 # 0) Environment Variables
 # =========================
 threshold_value = 0.25
-smart_indent_detection = False
 
 # =========================
 # 1) Text Normalization
@@ -39,52 +38,27 @@ def normalize_text(text):
 # =========================
 # 2) Intent Detection (Smart version using HuggingFace)
 # =========================
-def detect_intent(question, classifier):
+def detect_intent(question):
     q = question.strip()
 
-    if smart_indent_detection:
-        # Mapping dictionary: Persian labels to system keys
-        intent_mapping = {
-            "معرفی و شرح کلی شغل": "description",
-            "وظایف و مسئولیت‌های روزمره": "responsibilities",
-            "شایستگی‌ها، مهارت‌ها و توانمندی‌ها": "competencies",
-            "ابزارها و نرم‌افزارهای مورد نیاز": "tools",
-            "مسیر ارتقا شغلی و آینده": "career_path",
-            "محیط کاری و فضای کار": "work_context",
-            "سطح شغلی و جایگاه سازمانی": "level",
-            "دپارتمان و بخش سازمانی": "department"
-        }
+    intent_keywords = {
+        "responsibilities": ["وظایف", "وظیفه", "مسئولیت", "روزمره", "کارها", "چه کاری", "چیکار"],
+        "tools": ["ابزار", "نرم‌افزار", "برنامه", "تجهیزات", "سیستم", "با چی"],
+        "competencies": ["مهارت", "شایستگی", "توانایی", "توانمندی", "ویژگی", "دقت", "استعداد", "نیاز", "باید بلد"],
+        "career_path": ["ارتقا", "آینده", "پیشرفت", "مسیر", "بعدش", "ترفیع", "رشد"],
+        "work_context": ["محیط", "فضا", "شرایط کاری", "کجا کار", "محل"],
+        "level": ["سطح", "جایگاه", "رده", "سنیور", "جونیور"],
+        "department": ["دپارتمان", "بخش", "واحد", "تیم"],
+        "description": ["معرفی", "شرح", "چیست", "توضیح", "درباره", "چیه"]
+    }
 
-        candidate_labels = list(intent_mapping.keys())
+    for intent, keywords in intent_keywords.items():
+        for keyword in keywords:
+            if keyword in q:
+                return intent
 
-        # Zero-Shot model predicts the most relevant label for the user's query
-        result = classifier(q, candidate_labels)
-
-        # Extract the best label (index 0 always holds the highest score)
-        best_label = result['labels'][0]
-
-        # Return the equivalent English key for the system
-        return intent_mapping[best_label]
-
-    else:
-        intent_keywords = {
-            "responsibilities": ["وظایف", "وظیفه", "مسئولیت", "روزمره", "کارها", "چه کاری", "چیکار"],
-            "tools": ["ابزار", "نرم‌افزار", "برنامه", "تجهیزات", "سیستم", "با چی"],
-            "competencies": ["مهارت", "شایستگی", "توانایی", "توانمندی", "ویژگی", "دقت", "استعداد", "نیاز", "باید بلد"],
-            "career_path": ["ارتقا", "آینده", "پیشرفت", "مسیر", "بعدش", "ترفیع", "رشد"],
-            "work_context": ["محیط", "فضا", "شرایط کاری", "کجا کار", "محل"],
-            "level": ["سطح", "جایگاه", "رده", "سنیور", "جونیور"],
-            "department": ["دپارتمان", "بخش", "واحد", "تیم"],
-            "description": ["معرفی", "شرح", "چیست", "توضیح", "درباره", "چیه"]
-        }
-
-        for intent, keywords in intent_keywords.items():
-            for keyword in keywords:
-                if keyword in q:
-                    return intent
-
-        # اگر هیچ‌کدام نبود، برگرداندن همان general برای جستجو در کل دیتا
-        return "general"
+    # اگر هیچ‌کدام نبود، برگرداندن همان general برای جستجو در کل دیتا
+    return "general"
 
 # =========================
 # 3) Load & Prepare Data
@@ -277,11 +251,11 @@ def generate_simple_answer(job_row, intent):
     return f"📌 شغل: {title}\n\n{job_row.get('description', 'اطلاعاتی موجود نیست.')}"
 
 
-def answer_question(question, df, embeddings_dict, model, classifier, llm_generator, threshold=threshold_value):
+def answer_question(question, df, embeddings_dict, model, llm_generator, threshold=threshold_value):
     clean_question = normalize_text(question)
 
     # 1. Detect Intent
-    intent = detect_intent(clean_question, classifier)
+    intent = detect_intent(clean_question)
 
     # 2. Search & Match
     question_embedding = model.encode([clean_question])
@@ -326,9 +300,6 @@ def main():
     print("⏳ Loading Embedding Model...")
     model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 
-    print("⏳ Loading Zero-Shot Classifier...")
-    classifier = pipeline("zero-shot-classification", model="MoritzLaurer/mDeBERTa-v3-base-mnli-xnli")
-
     print("⏳ Loading Text Generation LLM (Qwen-1.5B)...")
     # Automatically maps the model to GPU (T4 in Colab) if available
     llm_generator = pipeline(
@@ -346,7 +317,7 @@ def main():
         if question.lower() in ["exit", "quit", "خروج"]:
             break
 
-        result = answer_question(question, df, embeddings_dict, model, classifier, llm_generator)
+        result = answer_question(question, df, embeddings_dict, model, llm_generator)
 
         print("\n------------------------------")
         print(f"🎯 Intent: {result['intent']}")
