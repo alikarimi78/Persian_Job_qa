@@ -61,7 +61,7 @@ SECONDARY_MARGIN = 0.03    # if (top1 - top2) <= this -> treat as interdisciplin
 # Text-generation API (OpenAI-compatible: OpenAI / OpenRouter / AvalAI / vLLM ...)
 LLM_MODEL    = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_BASE_URL = os.getenv("OPENAI_BASE_URL")   # set this for a proxy/relay service
-LLM_API_KEY  = os.getenv("OPENAI_API_KEY")
+LLM_API_KEY  = os.getenv("OPENAI_API_KEY", "AQ.Ab8RN6IkstnOGppO0BY6sRbW4RAkBHG-53G4o7Vk5iDmCSvMzA")
 
 
 # =========================================================
@@ -219,17 +219,38 @@ def build_context(row, fields, include_title=True):
 
 
 def llm_generate(messages, temperature=0.3, max_tokens=700, **_):
-    """Generate text via an OpenAI-compatible API."""
-    from openai import OpenAI
-    client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
-    resp = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-    return resp.choices[0].message.content.strip()
+    """Generate text via the Google Gemini API (google-genai SDK).
 
+    Gemini does not accept OpenAI-style [{role, content}] messages, so we adapt:
+      - the `system` message  -> config.system_instruction
+      - other messages        -> Content(role="user"|"model", parts=[Part(text=...)])
+    """
+    from google import genai
+    from google.genai import types
+
+    system_instruction = None
+    contents = []
+    for m in messages:
+        if m["role"] == "system":
+            system_instruction = m["content"]
+            continue
+        gemini_role = "model" if m["role"] == "assistant" else "user"
+        contents.append(
+            types.Content(role=gemini_role, parts=[types.Part(text=m["content"])])
+        )
+
+    client = genai.Client(api_key=LLM_API_KEY)
+    response = client.models.generate_content(
+        model=os.getenv("LLM_MODEL", "gemini-2.5-flash"),
+        contents=contents,
+        config=types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        ),
+    )
+    return (response.text or "").strip()
 
 _local_pipe = None
 def llm_generate_local(messages, temperature=0.3, max_tokens=400, **_):
