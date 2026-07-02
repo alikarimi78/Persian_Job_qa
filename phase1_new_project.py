@@ -57,12 +57,36 @@ EMB_CACHE_DIR = "emb_cache"
 THRESHOLD_MATCH  = 0.80    # if the best similarity is below this -> out of domain
 SECONDARY_MIN    = 0.78    # the 2nd job must be at least this relevant for interdisciplinary
 SECONDARY_MARGIN = 0.03    # if (top1 - top2) <= this -> treat as interdisciplinary
+PAIR_SIM_MAX = 0.92
 
 # Text-generation API (OpenAI-compatible: OpenAI / OpenRouter / AvalAI / vLLM ...)
 LLM_MODEL    = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_BASE_URL = os.getenv("OPENAI_BASE_URL")   # set this for a proxy/relay service
 LLM_API_KEY  = os.getenv("OPENAI_API_KEY", "AQ.Ab8RN6IkstnOGppO0BY6sRbW4RAkBHG-53G4o7Vk5iDmCSvMzA")
 
+
+SYSTEM_SINGLE = (
+    "تو موتور پاسخ‌گویی یک اپلیکیشن رسمی معرفی مشاغل هستی و خروجی تو مستقیماً و بدون ویرایش "
+    "به کاربر نهایی نمایش داده می‌شود. قوانین را دقیقاً رعایت کن:\n"
+    "1) پاسخ را مستقیم با خودِ جواب شروع کن؛ هیچ مقدمه، سلام، یا جمله‌ای مانند «سوال شما درباره...» ننویس.\n"
+    "2) فقط بر اساس «اطلاعات شغل» داده‌شده پاسخ بده و از دانش خودت چیزی اضافه نکن.\n"
+    "3) لحن رسمی و کتابی فارسی؛ از لحن محاوره‌ای و تعارف پرهیز کن.\n"
+    "4) خروجی متن ساده باشد؛ به هیچ وجه از Markdown (ستاره، #، بک‌تیک) استفاده نکن. "
+    "اگر فهرست لازم بود، هر مورد را در یک خط با خط تیره (-) بنویس.\n"
+    "5) کوتاه و دقیق: حداکثر پنج جمله یا چند مورد فهرستی کوتاه. جمع‌بندی و توضیح اضافه ممنوع.\n"
+    "6) اگر پاسخ در داده‌ها نبود فقط بنویس: «اطلاعات کافی در این مورد موجود نیست.»"
+)
+
+SYSTEM_INTERDISCIPLINARY = (
+    "تو موتور پاسخ‌گویی یک اپلیکیشن رسمی معرفی مشاغل هستی و خروجی تو مستقیماً و بدون ویرایش "
+    "به کاربر نهایی نمایش داده می‌شود. سوال کاربر به نقطه تلاقی دو شغل مرتبط مربوط است. قوانین:\n"
+    "1) اطلاعات دو شغل را در یک پاسخ واحد و منسجم ترکیب کن؛ دو فهرست جداگانه ارائه نکن.\n"
+    "2) پاسخ را مستقیم شروع کن؛ بدون مقدمه، سلام، یا اشاره به خود سوال.\n"
+    "3) در یک جمله کوتاه اشاره کن که پاسخ ترکیبی از دو حوزه است و نام دو شغل را بیاور، سپس اصل پاسخ.\n"
+    "4) فقط بر اساس داده‌های داده‌شده پاسخ بده؛ لحن رسمی و کتابی فارسی.\n"
+    "5) متن ساده بدون Markdown (ستاره، #، بک‌تیک)؛ فهرست فقط با خط تیره (-).\n"
+    "6) حداکثر شش جمله یا چند مورد فهرستی کوتاه؛ توضیح اضافه و جمع‌بندی ممنوع."
+)
 
 # =========================================================
 # 1) Schema, labels and intents
@@ -218,7 +242,7 @@ def build_context(row, fields, include_title=True):
     return "\n".join(lines)
 
 
-def llm_generate(messages, temperature=0.3, max_tokens=700, **_):
+def llm_generate(messages, temperature=0.2, max_tokens=700, **_):
     """Generate text via the Google Gemini API (google-genai SDK).
 
     Gemini does not accept OpenAI-style [{role, content}] messages, so we adapt:
@@ -279,11 +303,7 @@ def answer_single(question, row, intent, gen_fn):
     fields = INTENT_TO_FIELDS.get(intent, INTENT_TO_FIELDS["general"])
     context = build_context(row, fields)
     messages = [
-        {"role": "system", "content": (
-            "تو یک دستیار متخصص تحلیل مشاغل هستی. فقط و فقط بر اساس «اطلاعات شغل» که در "
-            "اختیارت قرار می‌گیرد پاسخ بده و چیزی از خودت اضافه نکن. اگر داده کافی نبود، "
-            "صادقانه بگو اطلاعات کافی موجود نیست. پاسخ را روان، فارسی و خلاصه بنویس."
-        )},
+        {"role": "system", "content": SYSTEM_SINGLE},
         {"role": "user", "content": f"اطلاعات شغل:\n{context}\n\nسوال کاربر: {question}"},
     ]
     return gen_fn(messages)
@@ -294,18 +314,12 @@ def answer_interdisciplinary(question, row1, row2, intent, gen_fn):
     c1 = build_context(row1, fields)
     c2 = build_context(row2, fields)
     messages = [
-        {"role": "system", "content": (
-            "تو یک مشاور شغلی خبره هستی. سوال کاربر به نقطه تلاقی دو حرفه مرتبط مربوط می‌شود. "
-            "وظیفه‌ات این است که اطلاعات هر دو شغل را با هم «ترکیب» کنی و یک پاسخ منسجم و یکپارچه "
-            "بدهی، نه اینکه دو فهرست جدا ارائه کنی. به کاربر توضیح بده که این یک نقش تلفیقی/"
-            "بین‌رشته‌ای است و وجوه مشترک و مکمل دو شغل را برجسته کن. فقط بر اساس داده‌های "
-            "داده‌شده پاسخ بده."
-        )},
+        {"role": "system", "content": SYSTEM_INTERDISCIPLINARY},
         {"role": "user", "content": (
             f"شغل اول:\n{c1}\n\nشغل دوم:\n{c2}\n\nسوال کاربر: {question}"
         )},
     ]
-    return gen_fn(messages, temperature=0.4)
+    return gen_fn(messages)
 
 
 # Plain templates without an LLM (fallback or --no-llm mode)
@@ -345,9 +359,11 @@ def answer_question(question, df, corpus_emb, model, gen_fn, use_llm=True):
 
     explicit = any(k in q for k in
                    ["بین رشته", "بین‌رشته", "ترکیب", "هر دو", "هردو", "تلفیق", "میان‌رشته"])
-    interdisciplinary = (
-        (s2 >= SECONDARY_MIN and (s1 - s2) <= SECONDARY_MARGIN)
-        or (explicit and s2 >= THRESHOLD_MATCH - 0.05)
+    pair_sim = float(np.dot(corpus_emb[i1], corpus_emb[i2]))
+    jobs_are_distinct = pair_sim < PAIR_SIM_MAX
+    interdisciplinary = jobs_are_distinct and (
+            (s2 >= SECONDARY_MIN and (s1 - s2) <= SECONDARY_MARGIN)
+            or (explicit and s2 >= THRESHOLD_MATCH - 0.05)
     )
 
     row1 = df.iloc[i1]
