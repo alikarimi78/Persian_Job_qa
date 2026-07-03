@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
-
+from huggingface_hub import login
 try:
     import torch
     _HAS_CUDA = torch.cuda.is_available()
@@ -44,10 +44,16 @@ except Exception:
 # =========================================================
 # 0) Config
 # =========================================================
+HUGGING_FACE_ACCESS_TOKE = "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"
+login(token=HUGGING_FACE_ACCESS_TOKE)
 EMBED_MODEL_NAME = "intfloat/multilingual-e5-base"   # strong multilingual retriever
 # Simpler alternative (no prefix needed, thresholds close to your old model):
 #   "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
 # Most accurate (heavier): "BAAI/bge-m3"
+
+# Hybrid retrieval weights: final score = W_FULL * full-text + W_TITLE * (title+aliases)
+W_FULL  = 0.6
+W_TITLE = 0.4
 
 DATA_PATH = "Merged_Occupations.xlsx"
 EMB_CACHE_DIR = "emb_cache"
@@ -61,8 +67,8 @@ PAIR_SIM_MAX = 0.92
 
 # Text-generation API (OpenAI-compatible: OpenAI / OpenRouter / AvalAI / vLLM ...)
 LLM_MODEL    = os.getenv("LLM_MODEL", "gpt-4o-mini")
-LLM_BASE_URL = os.getenv("OPENAI_BASE_URL")   # set this for a proxy/relay service
-LLM_API_KEY  = os.getenv("OPENAI_API_KEY", "AQ.Ab8RN6IkstnOGppO0BY6sRbW4RAkBHG-53G4o7Vk5iDmCSvMzA")
+LLM_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.gapgpt.app/v1")   # set this for a proxy/relay service
+LLM_API_KEY  = os.getenv("OPENAI_API_KEY", "sk-i8E2H0xTGE2Vs3BeBsQ3wy6G6J99dli8giNfudQaZbIKszx0")
 
 
 SYSTEM_SINGLE = (
@@ -161,6 +167,11 @@ def build_combined_text(row):
     ]
     return " . ".join(p for p in parts if p.split(": ", 1)[-1].strip())
 
+def build_title_alias_text(row):
+    """Short text (title + aliases only) for the name-focused embedding.
+    The '|' separator is replaced so the model reads aliases more naturally."""
+    aliases = row["aliases"].replace("|", "،")
+    return f"{row['job_title']} ، {aliases}".strip(" ،")
 
 def load_jobs_data(file_path=DATA_PATH):
     df = pd.read_excel(file_path)
@@ -207,23 +218,28 @@ def encode_queries(model, texts):
 
 
 def get_corpus_embeddings(df, model, rebuild=False):
-    """Cache keyed by model name + row count; prevents loading stale embeddings."""
+    """Builds/caches TWO embedding matrices:
+       - full   : combined_text (job identity + all details)
+       - title  : job_title + aliases only (name-focused matching)
+    Cache keyed by model name + row count; prevents loading stale embeddings."""
     os.makedirs(EMB_CACHE_DIR, exist_ok=True)
     tag = EMBED_MODEL_NAME.replace("/", "_")
-    path = os.path.join(EMB_CACHE_DIR, f"corpus_{tag}_{len(df)}.npy")
+    path = os.path.join(EMB_CACHE_DIR, f"corpus_{tag}_{len(df)}.npz")
 
     if os.path.exists(path) and not rebuild:
-        emb = np.load(path)
-        if len(emb) == len(df):
+        data = np.load(path)
+        if "full" in data.files and "title" in data.files and len(data["full"]) == len(df):
             print("✅ Loaded embeddings from cache.")
-            return emb
-        print("⚠️ Embedding count mismatch. Rebuilding...")
+            return data["full"], data["title"]
+        print("⚠️ Cache is stale or has the old format. Rebuilding...")
 
     print("⏳ Building embeddings (this may take a minute)...")
-    emb = encode_passages(model, df["combined_text"].tolist())
-    np.save(path, emb)
+    emb_full = encode_passages(model, df["combined_text"].tolist())
+    title_texts = df.apply(build_title_alias_text, axis=1).tolist()
+    emb_title = encode_passages(model, title_texts)
+    np.savez(path, full=emb_full, title=emb_title)
     print("✅ Embeddings saved.")
-    return emb
+    return emb_full, emb_title
 
 
 # =========================================================
@@ -242,39 +258,17 @@ def build_context(row, fields, include_title=True):
     return "\n".join(lines)
 
 
-def llm_generate(messages, temperature=0.2, max_tokens=700, **_):
-    """Generate text via the Google Gemini API (google-genai SDK).
-
-    Gemini does not accept OpenAI-style [{role, content}] messages, so we adapt:
-      - the `system` message  -> config.system_instruction
-      - other messages        -> Content(role="user"|"model", parts=[Part(text=...)])
-    """
-    from google import genai
-    from google.genai import types
-
-    system_instruction = None
-    contents = []
-    for m in messages:
-        if m["role"] == "system":
-            system_instruction = m["content"]
-            continue
-        gemini_role = "model" if m["role"] == "assistant" else "user"
-        contents.append(
-            types.Content(role=gemini_role, parts=[types.Part(text=m["content"])])
-        )
-
-    client = genai.Client(api_key=LLM_API_KEY)
-    response = client.models.generate_content(
-        model=os.getenv("LLM_MODEL", "gemini-2.5-flash"),
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=temperature,
-            max_output_tokens=max_tokens,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        ),
+def llm_generate(messages, temperature=0.3, max_tokens=700, **_):
+    """Generate text via an OpenAI-compatible API."""
+    from openai import OpenAI
+    client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
+    resp = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
-    return (response.text or "").strip()
+    return resp.choices[0].message.content.strip()
 
 _local_pipe = None
 def llm_generate_local(messages, temperature=0.3, max_tokens=400, **_):
@@ -340,13 +334,16 @@ def simple_answer_two(row1, row2, intent):
 # =========================================================
 # 7) Answer engine (unified retrieval + interdisciplinary check)
 # =========================================================
-def answer_question(question, df, corpus_emb, model, gen_fn, use_llm=True):
+def answer_question(question, df, emb_full, emb_title, model, gen_fn, use_llm=True):
     q = normalize_text(question)
     intent = detect_intent(q)
 
-    # Retrieval always runs on the full text (job identity); intent only picks display fields
+    # Hybrid retrieval: weighted mix of full-text and title/alias similarity
     q_emb = encode_queries(model, [q])
-    sims = cosine_similarity(q_emb, corpus_emb)[0]
+    sims_full  = cosine_similarity(q_emb, emb_full)[0]
+    sims_title = cosine_similarity(q_emb, emb_title)[0]
+    sims = W_FULL * sims_full + W_TITLE * sims_title
+
     order = np.argsort(sims)[::-1]
     i1, s1 = int(order[0]), float(sims[order[0]])
     i2, s2 = int(order[1]), float(sims[order[1]])
@@ -359,7 +356,7 @@ def answer_question(question, df, corpus_emb, model, gen_fn, use_llm=True):
 
     explicit = any(k in q for k in
                    ["بین رشته", "بین‌رشته", "ترکیب", "هر دو", "هردو", "تلفیق", "میان‌رشته"])
-    pair_sim = float(np.dot(corpus_emb[i1], corpus_emb[i2]))
+    pair_sim = float(np.dot(emb_full[i1], emb_full[i2]))
     jobs_are_distinct = pair_sim < PAIR_SIM_MAX
     interdisciplinary = jobs_are_distinct and (
             (s2 >= SECONDARY_MIN and (s1 - s2) <= SECONDARY_MARGIN)
@@ -386,10 +383,12 @@ def answer_question(question, df, corpus_emb, model, gen_fn, use_llm=True):
 # =========================================================
 # 8) Threshold calibration
 # =========================================================
-def calibrate(df, corpus_emb, model, queries):
+def calibrate(df, emb_full, emb_title, model, queries):
     print("\n=== Score calibration (use this to set THRESHOLD_*) ===")
     for qq in queries:
-        sims = cosine_similarity(encode_queries(model, [normalize_text(qq)]), corpus_emb)[0]
+        q_emb = encode_queries(model, [normalize_text(qq)])
+        sims = (W_FULL * cosine_similarity(q_emb, emb_full)[0]
+                + W_TITLE * cosine_similarity(q_emb, emb_title)[0])
         top = np.argsort(sims)[::-1][:5]
         print(f"\n❓ {qq}")
         for r in top:
@@ -414,10 +413,10 @@ def main():
     device = "cuda" if _HAS_CUDA else "cpu"
     print(f"⏳ Loading embedding model on {device.upper()} ...")
     model = SentenceTransformer(EMBED_MODEL_NAME, device=device)
-    corpus_emb = get_corpus_embeddings(df, model, rebuild=args.rebuild)
+    emb_full, emb_title = get_corpus_embeddings(df, model, rebuild=args.rebuild)
 
     if args.calibrate:
-        calibrate(df, corpus_emb, model, [
+        calibrate(df, emb_full, emb_title, model, [
             "وظایف افسر توپخانه چیست؟",
             "ابزارهای فرمانده تانک چیست؟",
             "شغلی که هم با رادار و هم با موشک کار کند چیست؟",
@@ -439,7 +438,7 @@ def main():
         if not question:
             continue
 
-        res = answer_question(question, df, corpus_emb, model, gen_fn, use_llm=use_llm)
+        res = answer_question(question, df, emb_full, emb_title, model, gen_fn, use_llm=use_llm)
 
         print("\n" + "-" * 40)
         print(f"mode: {res['mode']} | intent: {res['intent']}")
