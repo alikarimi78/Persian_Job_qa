@@ -100,12 +100,13 @@ RRF_K = 60            # standard RRF constant
 MAX_CANDIDATES = 15   # candidates taken from each channel before fusion
 SCAN_DEPTH = 5        # how deep to look for a *distinct* secondary job
 
-# Thresholds — refine them with `--eval` (it prints a data-driven suggestion).
-THRESHOLD_MATCH  = 0.81
-THRESHOLD_SPARSE = 0.30   # re-check after the BM25 fix with --eval; scale is new
-SECONDARY_MIN    = 0.82
-SECONDARY_MARGIN = 0.015
-PAIR_SIM_MAX     = 0.95   # bge-m3 pair similarities also run higher than e5
+# Thresholds calibrated for BAAI/bge-m3 on this dataset (from --calibrate output:
+# correct top-1 range ≈ 0.58–0.66, out-of-domain ceiling ≈ 0.36)
+THRESHOLD_MATCH  = 0.49   # midpoint of the OOD ceiling (0.36) and lowest correct (0.58)
+THRESHOLD_SPARSE = 0.15   # OOD sparse ceiling ≈ 0.066; correct matches run 0.19–0.36
+SECONDARY_MIN    = 0.50   # 2nd job must be genuinely relevant on the new scale
+SECONDARY_MARGIN = 0.01
+PAIR_SIM_MAX     = 0.85   # bge-m3 pair sims run lower than e5's; 0.95 would be too loosee5
 
 # Text-generation API (OpenAI-compatible)
 LLM_MODEL    = os.getenv("LLM_MODEL", "gpt-4o-mini")
@@ -124,6 +125,9 @@ SYSTEM_SINGLE = (
     "اگر فهرست لازم بود، هر مورد را در یک خط با خط تیره (-) بنویس.\n"
     "5) کوتاه و دقیق: حداکثر پنج جمله یا چند مورد فهرستی کوتاه. جمع‌بندی و توضیح اضافه ممنوع.\n"
     "6) اگر پاسخ در داده‌ها نبود فقط بنویس: «اطلاعات کافی در این مورد موجود نیست.»"
+    "7) اگر ورودی کاربر فقط نام یک شغل بود و پرسش مشخصی نداشت، آن را درخواست معرفی تلقی کن "
+    "و معرفی کوتاهی از همان شغل بر اساس داده‌ها ارائه بده؛ در این حالت از عبارت "
+    "«اطلاعات کافی موجود نیست» استفاده نکن."
 )
 
 SYSTEM_INTERDISCIPLINARY = (
@@ -477,6 +481,9 @@ def simple_answer_two(row1, row2, intent):
 def answer_question(question, df, emb_full, emb_title, bm25, model, gen_fn, use_llm=True):
     q = normalize_text(question)
     intent = detect_intent(q)
+    _QUESTION_MARKERS = ("چیست", "چیه", "چطور", "چگونه", "کدام", "چند", "؟", "?", "چی", "کجا", "آیا")
+    if intent == "general" and len(q.split()) <= 4 and not any(m in q for m in _QUESTION_MARKERS):
+        intent = "description"
     fields = INTENT_TO_FIELDS.get(intent, INTENT_TO_FIELDS["general"])
 
     order, dense, sparse = retrieve(q, model, emb_full, emb_title, bm25)
