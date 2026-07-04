@@ -44,9 +44,9 @@ except Exception:
 # =========================================================
 # 0) Config
 # =========================================================
-HUGGING_FACE_ACCESS_TOKE = "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"
+HUGGING_FACE_ACCESS_TOKE = os.getenv("HUGGING_FACE_ACCESS_TOKE")
 login(token=HUGGING_FACE_ACCESS_TOKE)
-EMBED_MODEL_NAME = "intfloat/multilingual-e5-base"   # strong multilingual retriever
+EMBED_MODEL_NAME = os.getenv("EMBED_MODEL_NAME", "intfloat/multilingual-e5-base")   # strong multilingual retriever
 # Simpler alternative (no prefix needed, thresholds close to your old model):
 #   "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
 # Most accurate (heavier): "BAAI/bge-m3"
@@ -68,7 +68,7 @@ PAIR_SIM_MAX = 0.92
 # Text-generation API (OpenAI-compatible: OpenAI / OpenRouter / AvalAI / vLLM ...)
 LLM_MODEL    = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.gapgpt.app/v1")   # set this for a proxy/relay service
-LLM_API_KEY  = os.getenv("OPENAI_API_KEY", "sk-i8E2H0xTGE2Vs3BeBsQ3wy6G6J99dli8giNfudQaZbIKszx0")
+LLM_API_KEY  = os.getenv("OPENAI_API_KEY")
 
 
 SYSTEM_SINGLE = (
