@@ -32,7 +32,7 @@ hazm==0.10.0
 hf-xet==1.5.1
 httpcore==1.0.9
 httpx==0.28.1
-huggingface_hub==1.21.0
+huggingface_hub==1.22.0
 idna==3.11
 Jinja2==3.1.6
 jiter==0.16.0
@@ -76,6 +76,7 @@ pydantic_core==2.46.4
 Pygments==2.19.2
 python-crfsuite==0.9.12
 python-dateutil==2.9.0.post0
+python-dotenv==1.2.2
 pytz==2025.2
 PyYAML==6.0.3
 regex==2026.1.15
