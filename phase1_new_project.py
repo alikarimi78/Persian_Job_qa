@@ -101,12 +101,11 @@ MAX_CANDIDATES = 15   # candidates taken from each channel before fusion
 SCAN_DEPTH = 5        # how deep to look for a *distinct* secondary job
 
 # Thresholds — refine them with `--eval` (it prints a data-driven suggestion).
-THRESHOLD_MATCH  = 0.78   # dense gate: best hybrid score below this AND ...
-THRESHOLD_SPARSE = 0.45   # ... sparse gate: best normalized BM25 below this -> out of domain
-SECONDARY_MIN    = 0.76   # 2nd job must be at least this relevant (dense) for interdisciplinary
-SECONDARY_MARGIN = 0.03   # ... AND within this margin of the 1st job
-PAIR_SIM_MAX     = 0.92   # if the two jobs are MORE similar than this to each other,
-                          # they are near-duplicates (same field) -> stay single
+THRESHOLD_MATCH  = 0.81
+THRESHOLD_SPARSE = 0.30   # re-check after the BM25 fix with --eval; scale is new
+SECONDARY_MIN    = 0.82
+SECONDARY_MARGIN = 0.015
+PAIR_SIM_MAX     = 0.95   # bge-m3 pair similarities also run higher than e5
 
 # Text-generation API (OpenAI-compatible)
 LLM_MODEL    = os.getenv("LLM_MODEL", "gpt-4o-mini")
@@ -292,6 +291,17 @@ def get_corpus_embeddings(df, model, rebuild=False):
     return emb_full, emb_title
 
 
+def warn_on_truncation(df, model):
+    """Report documents longer than the encoder window; their tail is silently
+    ignored by the encoder. Field order keeps critical data first, but you
+    should still know how many rows are affected."""
+    max_len = int(getattr(model, "max_seq_length", 512) or 512)
+    tok = model.tokenizer
+    n_over = sum(1 for t in df["combined_text"] if len(tok.encode(t)) > max_len)
+    if n_over:
+        log.warning(f"{n_over} document(s) exceed the encoder window ({max_len} tokens).")
+    else:
+        log.info(f"All documents fit the encoder window ({max_len} tokens).")
 # =========================================================
 # 6) Sparse channel: BM25 (lexical matching for exact names/terms)
 # =========================================================
@@ -314,22 +324,30 @@ class BM25:
             tok: math.log((self.doc_count - len(dd) + 0.5) / (len(dd) + 0.5) + 1.0)
             for tok, dd in self.inverted.items()
         }
+        # IDF assigned to out-of-vocabulary tokens: as rare as possible.
+        # OOV query words then weigh the normalizer DOWN, so queries whose
+        # content words are absent from the corpus get low normalized scores.
+        self.oov_idf = math.log((self.doc_count + 0.5) / 0.5 + 1.0)
 
     def score(self, query):
-        """Returns max-normalized scores in [0, 1] for the whole corpus."""
+        """Query-max normalized scores in [0, 1): raw BM25 divided by the score a
+        hypothetical document matching ALL query tokens (tf -> inf) would get.
+        Unlike per-query max-normalization, weak partial matches stay LOW."""
+        tokens = set(query.lower().split())
         scores = np.zeros(self.doc_count, dtype=np.float32)
-        for tok in set(query.lower().split()):
+        max_possible = 0.0
+        for tok in tokens:
+            idf = self.idf.get(tok, self.oov_idf)
+            max_possible += idf * (self.K1 + 1.0)
             dd = self.inverted.get(tok)
             if not dd:
                 continue
-            idf = self.idf[tok]
             idxs = np.fromiter(dd.keys(), dtype=np.int64)
             tfs = np.fromiter(dd.values(), dtype=np.float32)
             lens = self.doc_lengths[idxs]
             denom = tfs + self.K1 * (1.0 - self.B + self.B * lens / self.avg_len)
             scores[idxs] += idf * tfs * (self.K1 + 1.0) / denom
-        m = scores.max()
-        return scores / m if m > 0 else scores
+        return scores / max_possible if max_possible > 0 else scores
 
 
 # =========================================================
@@ -359,13 +377,17 @@ def retrieve(q_norm, model, emb_full, emb_title, bm25):
 # =========================================================
 # 8) Generation: retry with backoff, markdown stripping, template fallback
 # =========================================================
-def _clean_markdown(text):
-    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
-    text = re.sub(r"\*(.*?)\*", r"\1", text)
-    text = re.sub(r"`(.*?)`", r"\1", text)
-    text = re.sub(r"#{1,6}\s?", "", text)
-    return text.strip()
+_MD_BOLD = re.compile(r"\*\*(.*?)\*\*")
+_MD_ITALIC = re.compile(r"\*(.*?)\*")
+_MD_CODE = re.compile(r"`(.*?)`")
+_MD_HEADER = re.compile(r"#{1,6}\s?")
 
+def _clean_markdown(text):
+    text = _MD_BOLD.sub(r"\1", text)
+    text = _MD_ITALIC.sub(r"\1", text)
+    text = _MD_CODE.sub(r"\1", text)
+    text = _MD_HEADER.sub("", text)
+    return text.strip()
 
 _openai_client = None
 def llm_generate(messages, temperature=0.3, max_tokens=700, **_):
@@ -532,9 +554,11 @@ def _title_match(expected, got):
 def evaluate(eval_path, df, emb_full, emb_title, bm25, model):
     """Reads a CSV (question,expected). Empty `expected` = out-of-domain probe.
     Metrics are computed on the exact production `retrieve()` function."""
-    ev = pd.read_csv(eval_path).fillna("")
+    # utf-8-sig strips Excel's BOM; sep=None sniffs comma vs semicolon delimiters
+    ev = pd.read_csv(eval_path, encoding="utf-8-sig", sep=None, engine="python").fillna("")
+    ev.columns = [str(c).strip().lower() for c in ev.columns]
     if not {"question", "expected"} <= set(ev.columns):
-        raise ValueError("Eval file must have columns: question,expected")
+        raise ValueError(f"Eval file must have columns question,expected — found: {list(ev.columns)}")
 
     in_domain = ev[ev["expected"].str.strip() != ""]
     ood = ev[ev["expected"].str.strip() == ""]
@@ -642,6 +666,7 @@ def main():
     log.info(f"Loading embedding model on {device.upper()} ...")
     model = SentenceTransformer(EMBED_MODEL_NAME, device=device)
     emb_full, emb_title = get_corpus_embeddings(df, model, rebuild=args.rebuild)
+    warn_on_truncation(df, model)
 
     log.info("Building BM25 index...")
     bm25 = BM25(df["combined_text"].tolist())
