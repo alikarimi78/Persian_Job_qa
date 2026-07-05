@@ -124,7 +124,7 @@ SYSTEM_SINGLE = (
     "4) خروجی متن ساده باشد؛ به هیچ وجه از Markdown (ستاره، #، بک‌تیک) استفاده نکن. "
     "اگر فهرست لازم بود، هر مورد را در یک خط با خط تیره (-) بنویس.\n"
     "5) کوتاه و دقیق: حداکثر پنج جمله یا چند مورد فهرستی کوتاه. جمع‌بندی و توضیح اضافه ممنوع.\n"
-    "6) اگر پاسخ در داده‌ها نبود فقط بنویس: «اطلاعات کافی در این مورد موجود نیست.»"
+    "6) اگر پاسخ در داده‌ها نبود فقط بنویس: «اطلاعات کافی در این مورد موجود نیست.»\n"
     "7) اگر ورودی کاربر فقط نام یک شغل بود و پرسش مشخصی نداشت، آن را درخواست معرفی تلقی کن "
     "و معرفی کوتاهی از همان شغل بر اساس داده‌ها ارائه بده؛ در این حالت از عبارت "
     "«اطلاعات کافی موجود نیست» استفاده نکن."
@@ -481,8 +481,10 @@ def simple_answer_two(row1, row2, intent):
 def answer_question(question, df, emb_full, emb_title, bm25, model, gen_fn, use_llm=True):
     q = normalize_text(question)
     intent = detect_intent(q)
-    _QUESTION_MARKERS = ("چیست", "چیه", "چطور", "چگونه", "کدام", "چند", "؟", "?", "چی", "کجا", "آیا")
-    if intent == "general" and len(q.split()) <= 4 and not any(m in q for m in _QUESTION_MARKERS):
+    _QUESTION_WORDS = {"چیست", "چیه", "چطور", "چگونه", "کدام", "چند", "چی", "کجا", "آیا"}
+    tokens = set(q.split())
+    is_question = ("؟" in q) or ("?" in q) or bool(tokens & _QUESTION_WORDS)
+    if intent == "general" and len(tokens) <= 4 and not is_question:
         intent = "description"
     fields = INTENT_TO_FIELDS.get(intent, INTENT_TO_FIELDS["general"])
 
