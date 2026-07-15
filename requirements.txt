@@ -5,10 +5,10 @@ psycopg2-binary>=2.9
 pydantic-settings>=2.2
 PyJWT>=2.8
 passlib[bcrypt]>=1.7
-alembic>=1.13
+alembic==1.18.5
 
 # RAG engine
-numpy>=1.26
+numpy==1.24.3
 pandas>=2.0
 openpyxl>=3.1
 sentence-transformers>=3.0

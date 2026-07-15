@@ -1,19 +1,19 @@
 from pydantic_settings import BaseSettings
-
+from os import getenv
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "postgresql+psycopg2://jobqa:jobqa@db:5432/jobqa"
-    JWT_SECRET: str = "change-me-in-production"
+    DATABASE_URL: str = f"postgresql+psycopg2://{getenv('POSTGRES_USER')}:{getenv('POSTGRES_PASSWORD')}@{getenv('DATABASE_HOST')}:{getenv('DATABASE_PORT')}/{getenv('POSTGRES_DB')}"
+    JWT_SECRET: str = getenv('JWT_SECRET')
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 60 * 24
 
-    OPENAI_API_KEY: str = ""
-    OPENAI_BASE_URL: str | None = None
-    LLM_MODEL: str = "gpt-4o-mini"
-    EMBED_MODEL_NAME: str = "BAAI/bge-m3"
+    OPENAI_API_KEY: str = getenv("OPENAI_API_KEY")
+    OPENAI_BASE_URL: str | None = getenv("OPENAI_BASE_URL")
+    LLM_MODEL: str = getenv("LLM_MODEL", "gpt-4o-mini")
+    EMBED_MODEL_NAME: str = getenv("EMBED_MODEL_NAME", "BAAI/bge-m3")
 
     ADMIN_USERNAME: str = "admin"
-    ADMIN_PASSWORD: str = "change-me"
+    ADMIN_PASSWORD: str = "123123"
 
     class Config:
         env_file = ".env"

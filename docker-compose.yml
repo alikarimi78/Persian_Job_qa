@@ -13,7 +13,9 @@ services:
       retries: 10
 
   api:
-    build: .
+    image: ai_model:latest
+    build:
+      context: .
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg2://jobqa:jobqa@db:5432/jobqa
