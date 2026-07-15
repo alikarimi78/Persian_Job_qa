@@ -8,7 +8,7 @@ import pandas as pd
 
 from app.auth import hash_password
 from app.config import settings
-from app.database import Base, SessionLocal, engine
+from app.database import SessionLocal
 from app.models import User, Role, JobRecord, JobStatus
 
 COLUMNS = ["job_title", "aliases", "tools", "skills",
@@ -16,7 +16,7 @@ COLUMNS = ["job_title", "aliases", "tools", "skills",
 
 
 def main(xlsx_path: str):
-    Base.metadata.create_all(bind=engine)
+    # Schema must already exist: run `alembic upgrade head` first.
     db = SessionLocal()
     try:
         if not db.query(User).filter(User.username == settings.ADMIN_USERNAME).first():

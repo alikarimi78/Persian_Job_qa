@@ -19,7 +19,6 @@ import os
 import re
 import time
 import math
-import logging
 from collections import Counter, defaultdict
 import sys
 
@@ -53,8 +52,6 @@ except Exception:
     _normalizer = None
 
 from openai import OpenAI, RateLimitError, APIConnectionError, APITimeoutError
-
-log = logging.getLogger("job_qa")
 
 
 # =========================================================
@@ -227,15 +224,12 @@ class BM25:
 class JobQAEngine:
     def __init__(self, data_path, rebuild_embeddings=False):
         self.df = self._load_data(data_path)
-        log.info(f"Loaded {len(self.df)} occupations.")
 
         device = "cuda" if _HAS_CUDA else "cpu"
-        log.info(f"Loading embedding model on {device.upper()} ...")
         self.model = SentenceTransformer(EMBED_MODEL_NAME, device=device)
         self.emb_full, self.emb_title = self._load_or_build_embeddings(rebuild_embeddings)
         self.bm25 = BM25(self.df["combined_text"].tolist())
         self._client = None
-        log.info("Engine ready.")
 
     # ---------- data ----------
     @staticmethod
@@ -261,8 +255,6 @@ class JobQAEngine:
         df = pd.read_excel(path)
         df.columns = [str(c).strip().lower() for c in df.columns]
         missing = [c for c in EXPECTED_COLUMNS if c not in df.columns]
-        if missing:
-            log.warning(f"Missing columns (filled empty): {missing}")
         for col in EXPECTED_COLUMNS:
             if col not in df.columns:
                 df[col] = ""
@@ -285,11 +277,8 @@ class JobQAEngine:
         if os.path.exists(path) and not rebuild:
             data = np.load(path)
             if {"full", "title"} <= set(data.files) and len(data["full"]) == len(self.df):
-                log.info("Embeddings loaded from cache.")
                 return data["full"], data["title"]
-            log.warning("Embedding cache stale; rebuilding.")
 
-        log.info("Building embeddings ...")
         emb_full = self._encode(self.df["combined_text"].tolist(), "passage")
         emb_title = self._encode(self.df.apply(self._title_alias_text, axis=1).tolist(), "passage")
         np.savez(path, full=emb_full, title=emb_title)
@@ -316,7 +305,6 @@ class JobQAEngine:
         """API call with exponential backoff; returns '' on failure (caller falls
         back to the template answer)."""
         if not LLM_API_KEY:
-            log.error("OPENAI_API_KEY not set; using template answers.")
             return ""
         if self._client is None:
             self._client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
@@ -329,13 +317,10 @@ class JobQAEngine:
                 return _clean_markdown((resp.choices[0].message.content or "").strip())
             except (RateLimitError, APIConnectionError, APITimeoutError) as e:
                 if attempt == LLM_MAX_RETRIES:
-                    log.error(f"API retries exhausted: {e}")
                     return ""
                 delay = LLM_BASE_DELAY * (2 ** (attempt - 1))
-                log.warning(f"Transient API error; retrying in {delay:.0f}s")
                 time.sleep(delay)
             except Exception as e:
-                log.error(f"API failure: {e}")
                 return ""
         return ""
 
@@ -431,7 +416,6 @@ if __name__ == "__main__":
         try:
             res = engine.answer(question)
         except Exception as e:
-            log.error(f"Unexpected error: {e}")
             continue
         print(f"\nmode: {res['mode']} | intent: {res['intent']}")
         if res["mode"] == "single":

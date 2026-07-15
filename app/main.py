@@ -3,7 +3,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from .database import Base, engine as db_engine
 from .engine_manager import manager
 from .routers import auth, search, jobs, admin
 
@@ -12,7 +11,7 @@ log = logging.getLogger("main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=db_engine)
+    # Schema is managed by Alembic (run `alembic upgrade head`), not create_all.
     try:
         manager.load()                       # load QA engine from approved DB rows
     except RuntimeError as e:
