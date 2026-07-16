@@ -8,6 +8,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir torch==2.7.1 --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
+RUN apt-get update && apt-get install -y vim iputils-ping curl
+
 COPY job_qa_service.py alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
