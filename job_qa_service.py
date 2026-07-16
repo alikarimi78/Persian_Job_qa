@@ -218,8 +218,8 @@ class BM25:
 # Engine
 # =========================================================
 class JobQAEngine:
-    def __init__(self, data_path, rebuild_embeddings=False):
-        self.df = self._load_data(data_path)
+    def __init__(self, data, rebuild_embeddings=False):
+        self.df = self._load_data(data)
 
         device = "cuda" if _HAS_CUDA else "cpu"
         self.model = SentenceTransformer(EMBED_MODEL_NAME, device=device)
@@ -247,10 +247,9 @@ class JobQAEngine:
     def _title_alias_text(row):
         return f"{row['job_title']} ، {row['aliases'].replace('|', '،')}".strip(" ،")
 
-    def _load_data(self, path):
-        df = pd.read_excel(path)
+    def _load_data(self, data):
+        df = data.copy() if isinstance(data, pd.DataFrame) else pd.read_excel(data)
         df.columns = [str(c).strip().lower() for c in df.columns]
-        missing = [c for c in EXPECTED_COLUMNS if c not in df.columns]
         for col in EXPECTED_COLUMNS:
             if col not in df.columns:
                 df[col] = ""
