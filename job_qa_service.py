@@ -26,11 +26,6 @@ import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
 
 # Force UTF-8 on stdio; malformed terminal bytes become � instead of crashing
 for _stream in (sys.stdin, sys.stdout, sys.stderr):
@@ -75,6 +70,7 @@ PAIR_SIM_MAX     = 0.85         # above this, two jobs are near-duplicates -> si
 LLM_MODEL    = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_BASE_URL = os.getenv("OPENAI_BASE_URL")
 LLM_API_KEY  = os.getenv("OPENAI_API_KEY")
+OCCUPATIONS_PATH = os.getenv("OCCUPATIONS_PATH")
 LLM_MAX_RETRIES, LLM_BASE_DELAY = 3, 2.0
 
 SYSTEM_SINGLE = (
@@ -402,7 +398,7 @@ class JobQAEngine:
 # Standalone demo
 # =========================================================
 if __name__ == "__main__":
-    engine = JobQAEngine("Merged_Occupations.xlsx")
+    engine = JobQAEngine(OCCUPATIONS_PATH)
     print("✅ Ready. Ask your question (or 'خروج').")
     while True:
         try:
