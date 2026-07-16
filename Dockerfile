@@ -12,7 +12,8 @@ COPY job_qa_service.py alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
 COPY scripts ./scripts
+COPY Merged_Occupations.xlsx ./
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "alembic upgrade head && python -m scripts.seed_from_xlsx Merged_Occupations.xlsx && uvicorn app.main:app --host 0.0.0.0 --port 8000"]

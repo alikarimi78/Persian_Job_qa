@@ -30,7 +30,7 @@ def normalize_separators(val):
 for col in merged_df.columns:
     merged_df[col] = merged_df[col].apply(normalize_separators)
 
-output_path = "../Merged_Occupations.xlsx"
+output_path = "../scripts/Merged_Occupations.xlsx"
 merged_df.to_excel(output_path, index=False)
 
 wb = load_workbook(output_path)

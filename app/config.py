@@ -12,8 +12,8 @@ class Settings(BaseSettings):
     LLM_MODEL: str = getenv("LLM_MODEL", "gpt-4o-mini")
     EMBED_MODEL_NAME: str = getenv("EMBED_MODEL_NAME", "BAAI/bge-m3")
 
-    ADMIN_USERNAME: str = "admin"
-    ADMIN_PASSWORD: str = "123123"
+    ADMIN_USERNAME: str = getenv("ADMIN_USERNAME")
+    ADMIN_PASSWORD: str = getenv("ADMIN_PASSWORD")
 
     class Config:
         env_file = "../.env"
