@@ -29,6 +29,11 @@ class SearchOut(BaseModel):
     jobs: list[str] | None = None
     score: float | None = None
     scores: list[float] | None = None
+    # job-request modes: nearest existing titles, and (when mode == 'job_generated')
+    # the proposed record in JobIn's shape, ready to POST to /jobs/suggestions.
+    # Kept as a plain mapping: a draft is model output, not a validated record.
+    related_jobs: list[str] | None = None
+    job_draft: dict[str, str] | None = None
 
 
 class JobIn(BaseModel):

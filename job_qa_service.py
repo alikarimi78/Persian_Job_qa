@@ -7,6 +7,11 @@ fused with BM25 via Reciprocal Rank Fusion -> dual-gate out-of-domain check ->
 single or interdisciplinary answer generated through an OpenAI-compatible API,
 with automatic template fallback on any API failure.
 
+A second entry path handles job *requests* ("شغلی می‌خواهم با این ویژگی‌ها..."):
+the described spec is retrieved against the corpus and either an existing close
+match is returned, or a brand-new occupation record is generated in the dataset's
+own 8-column shape, ready to be submitted as a suggestion.
+
 Backend usage:
     from job_qa_service import JobQAEngine
     engine = JobQAEngine("Merged_Occupations.xlsx")   # load once at startup
@@ -19,6 +24,7 @@ import os
 import re
 import time
 import math
+import json
 from collections import Counter, defaultdict
 import sys
 
@@ -67,6 +73,13 @@ SECONDARY_MIN    = 0.50         # min dense score of the 2nd job (interdisciplin
 SECONDARY_MARGIN = 0.01         # max gap between 1st and 2nd job
 PAIR_SIM_MAX     = 0.85         # above this, two jobs are near-duplicates -> single mode
 
+# Job-request mode. A spec description must match an existing record more closely
+# than a plain question does before we call it "the same job", hence the higher
+# bar than THRESHOLD_MATCH; below DISCOVERY_FLOOR the text is not about work at all.
+DISCOVERY_MATCH   = 0.60        # >= this: an existing job already covers the request
+DISCOVERY_FLOOR   = 0.35        # < this (and sparse weak too): out of domain, do not invent
+DISCOVERY_RELATED = 3           # neighbouring jobs shown to the user / fed to the generator
+
 LLM_MODEL    = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_BASE_URL = os.getenv("OPENAI_BASE_URL")
 LLM_API_KEY  = os.getenv("OPENAI_API_KEY")
@@ -102,6 +115,35 @@ SYSTEM_INTERDISCIPLINARY = (
     "6) حداکثر شش جمله یا چند مورد فهرستی کوتاه؛ توضیح اضافه و جمع‌بندی ممنوع."
 )
 
+SYSTEM_JOB_MATCH = (
+    "تو موتور پاسخ‌گویی یک اپلیکیشن رسمی معرفی مشاغل هستی. کاربر ویژگی‌های شغل مورد نظرش را "
+    "توصیف کرده و یک شغل موجود در پایگاه داده با آن توصیف هم‌خوانی دارد. قوانین:\n"
+    "1) با یک جمله کوتاه اعلام کن که چنین شغلی وجود دارد و نام آن را بیاور.\n"
+    "2) سپس توضیح بده کدام بخش از توصیف کاربر با کدام ویژگی این شغل مطابقت دارد.\n"
+    "3) فقط بر اساس «اطلاعات شغل» داده‌شده بنویس و از دانش خودت چیزی اضافه نکن.\n"
+    "4) لحن رسمی و کتابی فارسی؛ متن ساده بدون Markdown (ستاره، #، بک‌تیک)؛ فهرست فقط با خط تیره (-).\n"
+    "5) حداکثر شش جمله. مقدمه، سلام و جمع‌بندی ممنوع."
+)
+
+SYSTEM_JOB_GENERATE = (
+    "تو طراح مشاغل یک اپلیکیشن رسمی معرفی مشاغل هستی. کاربر ویژگی‌های شغلی را توصیف کرده که در "
+    "پایگاه داده وجود ندارد. وظیفه تو ساختن یک رکورد شغلی جدید و واقع‌گرایانه بر اساس همان توصیف است.\n"
+    "خروجی تو باید فقط و فقط یک شیء JSON معتبر باشد؛ هیچ متن، توضیح یا بلوک کد قبل و بعد از آن ننویس.\n"
+    "کلیدهای JSON دقیقاً اینها هستند و مقادیر همه فارسی‌اند:\n"
+    'job_title, aliases, tools, skills, work_context, career_path_next, description, responsibilities\n'
+    "قوانین محتوا:\n"
+    "1) job_title: یک عنوان شغلی رسمی، کوتاه و باورپذیر فارسی که توصیف کاربر را پوشش دهد.\n"
+    "2) aliases (۱ تا ۳ مورد)، tools (۲ تا ۵ مورد)، skills (۳ تا ۵ مورد)، responsibilities (۳ تا ۵ مورد) "
+    "و career_path_next (۱ تا ۳ مورد) را به‌صورت رشته‌ای بنویس که موارد آن با کاراکتر | از هم جدا شده‌اند.\n"
+    "3) description و work_context هرکدام یک یا دو جمله کامل فارسی باشند.\n"
+    "4) همه محتوا باید مستقیماً از خواسته‌های کاربر ریشه بگیرد؛ ویژگی‌هایی که کاربر گفته را نادیده نگیر.\n"
+    "5) شغل باید واقع‌گرایانه و قابل تحقق باشد؛ اگر درخواست کاربر خیالی یا اغراق‌آمیز بود، نزدیک‌ترین "
+    "معادل واقعی و حرفه‌ای آن را طراحی کن.\n"
+    "6) «مشاغل مشابه موجود» فقط برای الگوگرفتن از سبک نگارش و پرهیز از تکرارند؛ شغل جدید باید با آنها "
+    "متفاوت باشد و رونویسی از آنها نباشد.\n"
+    "7) از Markdown استفاده نکن و هیچ فیلدی را خالی نگذار."
+)
+
 EXPECTED_COLUMNS = ["job_title", "aliases", "tools", "skills",
                     "work_context", "career_path_next", "description", "responsibilities"]
 
@@ -132,7 +174,35 @@ INTENT_KEYWORDS = {
 EXPLICIT_COMBO_WORDS = ["بین رشته", "بین‌رشته", "ترکیب", "هر دو", "هردو", "تلفیق", "میان‌رشته"]
 QUESTION_WORDS = {"چیست", "چیه", "چطور", "چگونه", "کدام", "چند", "چی", "کجا", "آیا"}
 
+# The user is describing a job they want rather than asking about a known one.
+# Both ZWNJ and plain-space spellings are listed because user input is not always
+# normalized the same way hazm normalizes the corpus.
+JOB_REQUEST_KEYWORDS = [
+    "شغلی می‌خواهم", "شغلی میخواهم", "شغلی می خواهم", "شغلی میخوام",
+    "شغل می‌خواهم", "شغل میخواهم", "شغل میخوام",
+    "کاری می‌خواهم", "کاری میخواهم", "کاری میخوام",
+    "دنبال شغلی", "دنبال شغل", "دنبال کاری", "به دنبال شغل",
+    "چه شغلی", "چه کاری مناسب", "کدام شغل", "کدوم شغل",
+    "شغلی پیشنهاد", "شغل پیشنهاد", "کاری پیشنهاد", "شغلی معرفی", "شغل معرفی کن",
+    "شغلی هست که", "شغلی وجود دارد", "شغلی وجود داره", "شغلی سراغ",
+    "مناسب من", "برای من مناسب", "به من می‌آید", "به من میاد",
+    "می‌خواهم کار کنم", "میخوام کار کنم", "علاقه‌مند به کاری", "علاقه مند به کاری",
+]
+
 OOD_MESSAGE = "متاسفانه در دیتابیس من اطلاعاتی درباره این موضوع پیدا نشد."
+
+MATCH_HEADER = "بر اساس ویژگی‌هایی که توصیف کردی، این شغل در پایگاه داده موجود است:"
+DRAFT_HEADER = ("شغلی که دقیقاً منطبق بر توصیف تو باشد در پایگاه داده موجود نیست؛ "
+                "بر اساس ویژگی‌هایی که گفتی، شغل زیر پیشنهاد می‌شود:")
+DRAFT_FOOTER = ("این عنوان و مشخصات پیشنهادی است و هنوز در پایگاه داده ثبت نشده؛ "
+                "در صورت تایید می‌توانی آن را به‌عنوان شغل جدید ثبت کنی.")
+RELATED_LABEL = "مشاغل مرتبط موجود در پایگاه داده"
+DISCOVERY_UNAVAILABLE = ("امکان ساخت شغل پیشنهادی در این لحظه فراهم نیست؛ "
+                         "نزدیک‌ترین مشاغل موجود در پایگاه داده اینها هستند:")
+
+# Shown when a job is presented as a whole profile rather than as an answer to one intent
+DISCOVERY_FIELDS = ["description", "responsibilities", "skills", "tools",
+                    "work_context", "career_path_next"]
 
 _MD_PATTERNS = [(re.compile(r"\*\*(.*?)\*\*"), r"\1"), (re.compile(r"\*(.*?)\*"), r"\1"),
                 (re.compile(r"`(.*?)`"), r"\1"), (re.compile(r"#{1,6}\s?"), "")]
@@ -162,6 +232,26 @@ def detect_intent(question):
         if any(k in question for k in kws):
             return intent
     return "general"
+
+
+def is_job_request(question):
+    """True when the user describes a job they want instead of asking about one."""
+    return any(k in question for k in JOB_REQUEST_KEYWORDS)
+
+
+def _parse_json_object(text):
+    """Extracts the first JSON object from an LLM reply; None if there is none.
+    Tolerates the code fences and stray prose some models add around JSON."""
+    if not text:
+        return None
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        return None
+    try:
+        obj = json.loads(match.group(0))
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
 def build_context(row, fields, include_title=True):
@@ -296,9 +386,10 @@ class JobQAEngine:
         return order, dense, sparse
 
     # ---------- generation ----------
-    def _llm(self, messages, temperature=0.3, max_tokens=700):
+    def _llm(self, messages, temperature=0.3, max_tokens=700, clean=True):
         """API call with exponential backoff; returns '' on failure (caller falls
-        back to the template answer)."""
+        back to the template answer). `clean=False` keeps the reply verbatim, which
+        JSON replies need since markdown stripping would corrupt them."""
         if not LLM_API_KEY:
             return ""
         if self._client is None:
@@ -309,7 +400,8 @@ class JobQAEngine:
                 resp = self._client.chat.completions.create(
                     model=LLM_MODEL, messages=messages,
                     temperature=temperature, max_tokens=max_tokens)
-                return _clean_markdown((resp.choices[0].message.content or "").strip())
+                text = (resp.choices[0].message.content or "").strip()
+                return _clean_markdown(text) if clean else text
             except (RateLimitError, APIConnectionError, APITimeoutError) as e:
                 if attempt == LLM_MAX_RETRIES:
                     return ""
@@ -329,12 +421,90 @@ class JobQAEngine:
                 f"— {row1['job_title']}:\n{build_context(row1, fields, include_title=False)}\n\n"
                 f"— {row2['job_title']}:\n{build_context(row2, fields, include_title=False)}")
 
+    # ---------- job generation ----------
+    def _generate_job(self, question, neighbour_idxs):
+        """Designs a new occupation record from the user's spec. Returns a dict with
+        the dataset's own columns (so it can be stored as a suggestion), or None if
+        the API is unavailable or its reply is unusable."""
+        reference = "\n\n".join(
+            f"نمونه {n + 1}:\n{build_context(self.df.iloc[i], DISCOVERY_FIELDS)}"
+            for n, i in enumerate(neighbour_idxs))
+
+        raw = self._llm([
+            {"role": "system", "content": SYSTEM_JOB_GENERATE},
+            {"role": "user", "content":
+                f"درخواست کاربر:\n{question}\n\n"
+                f"مشاغل مشابه موجود (فقط برای الگوی سبک نگارش و پرهیز از تکرار):\n{reference}"},
+        ], temperature=0.5, max_tokens=900, clean=False)
+
+        obj = _parse_json_object(raw)
+        if obj is None:
+            return None
+        draft = {c: normalize_text(obj.get(c, "")) for c in EXPECTED_COLUMNS}
+        return draft if draft["job_title"] else None
+
+    @staticmethod
+    def _render_draft(draft, related):
+        """Formats a generated record in the same plain-text style as the templates,
+        so the answer looks identical whether it came from data or from the model."""
+        lines = [DRAFT_HEADER, "", f"📌 {FIELD_LABELS['job_title']}: {draft['job_title']}", ""]
+        lines += [f"{FIELD_LABELS[f]}: {draft[f].replace('|', '،')}"
+                  for f in ["aliases"] + DISCOVERY_FIELDS if draft.get(f)]
+        if related:
+            lines += ["", f"{RELATED_LABEL}: " + "، ".join(related)]
+        lines += ["", DRAFT_FOOTER]
+        return "\n".join(lines)
+
+    def _discover(self, question, q_norm, use_llm=True):
+        """Job-request path: return a close existing job, or design a new one."""
+        order, dense, sparse = self._retrieve(q_norm)
+        i1 = order[0]
+        s1_dense, s1_sparse = float(dense[i1]), float(sparse[i1])
+        related = [self.df.iloc[i]["job_title"] for i in order[:DISCOVERY_RELATED]]
+
+        # Nothing in the request relates to work at all -> do not invent a job
+        if s1_dense < DISCOVERY_FLOOR and s1_sparse < THRESHOLD_SPARSE:
+            return {"mode": "out_of_domain", "intent": "job_request",
+                    "score": s1_dense, "answer": OOD_MESSAGE}
+
+        if s1_dense >= DISCOVERY_MATCH:
+            row = self.df.iloc[i1]
+            ans = self._llm([
+                {"role": "system", "content": SYSTEM_JOB_MATCH},
+                {"role": "user", "content":
+                    f"اطلاعات شغل:\n{build_context(row, DISCOVERY_FIELDS)}\n\n"
+                    f"توصیف کاربر: {question}"},
+            ]) if use_llm else ""
+            if not ans:
+                ans = f"{MATCH_HEADER}\n\n{self._template_one(row, DISCOVERY_FIELDS)}"
+            return {"mode": "job_match", "intent": "job_request",
+                    "job": row["job_title"], "score": s1_dense,
+                    "related_jobs": related, "answer": ans}
+
+        draft = self._generate_job(question, order[:DISCOVERY_RELATED]) if use_llm else None
+        if draft is None:
+            # Generation needs the API; without it the nearest records are the best we have
+            return {"mode": "out_of_domain", "intent": "job_request",
+                    "score": s1_dense, "related_jobs": related,
+                    "answer": DISCOVERY_UNAVAILABLE + "\n" + "\n".join(f"- {t}" for t in related)}
+
+        return {"mode": "job_generated", "intent": "job_request",
+                "job": draft["job_title"], "score": s1_dense,
+                "job_draft": draft, "related_jobs": related,
+                "answer": self._render_draft(draft, related)}
+
     # ---------- public API ----------
     def answer(self, question, use_llm=True):
         """Answers one question. Returns a dict with keys:
-        mode ('single'|'interdisciplinary'|'out_of_domain'), intent, answer,
-        plus job/score fields depending on mode."""
+        mode ('single'|'interdisciplinary'|'job_match'|'job_generated'|'out_of_domain'),
+        intent, answer, plus job/score fields depending on mode. 'job_generated' also
+        carries 'job_draft': the proposed record in the dataset's own columns."""
         q = normalize_text(question)
+
+        # A described spec is a different task from a question about a known job
+        if is_job_request(q):
+            return self._discover(question, q, use_llm)
+
         intent = detect_intent(q)
 
         # Bare job names ("معلم جغرافیا") carry no question verb -> description request
@@ -413,8 +583,10 @@ if __name__ == "__main__":
         except Exception as e:
             continue
         print(f"\nmode: {res['mode']} | intent: {res['intent']}")
-        if res["mode"] == "single":
+        if res["mode"] in ("single", "job_match", "job_generated"):
             print(f"job: {res['job']} (score={res['score']:.3f})")
         elif res["mode"] == "interdisciplinary":
             print(f"jobs: {res['jobs'][0]} + {res['jobs'][1]}")
+        if res.get("related_jobs"):
+            print(f"related: {'، '.join(res['related_jobs'])}")
         print(f"\n🤖 {res['answer']}")
