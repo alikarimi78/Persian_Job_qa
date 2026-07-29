@@ -13,7 +13,7 @@ from .models import JobRecord, JobStatus
 
 log = logging.getLogger("engine_manager")
 
-_COLUMNS = ["job_title", "aliases", "tools", "skills",
+_COLUMNS = ["job_title", "aliases", "tools", "skills", "knowledge", "abilities",
             "work_context", "career_path_next", "description", "responsibilities"]
 
 

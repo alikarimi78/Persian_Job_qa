@@ -25,6 +25,7 @@ import re
 import time
 import math
 import json
+import hashlib
 from collections import Counter, defaultdict
 import sys
 
@@ -130,11 +131,15 @@ SYSTEM_JOB_GENERATE = (
     "پایگاه داده وجود ندارد. وظیفه تو ساختن یک رکورد شغلی جدید و واقع‌گرایانه بر اساس همان توصیف است.\n"
     "خروجی تو باید فقط و فقط یک شیء JSON معتبر باشد؛ هیچ متن، توضیح یا بلوک کد قبل و بعد از آن ننویس.\n"
     "کلیدهای JSON دقیقاً اینها هستند و مقادیر همه فارسی‌اند:\n"
-    'job_title, aliases, tools, skills, work_context, career_path_next, description, responsibilities\n'
+    'job_title, aliases, tools, skills, knowledge, abilities, work_context, career_path_next, '
+    'description, responsibilities\n'
     "قوانین محتوا:\n"
     "1) job_title: یک عنوان شغلی رسمی، کوتاه و باورپذیر فارسی که توصیف کاربر را پوشش دهد.\n"
-    "2) aliases (۱ تا ۳ مورد)، tools (۲ تا ۵ مورد)، skills (۳ تا ۵ مورد)، responsibilities (۳ تا ۵ مورد) "
-    "و career_path_next (۱ تا ۳ مورد) را به‌صورت رشته‌ای بنویس که موارد آن با کاراکتر | از هم جدا شده‌اند.\n"
+    "2) aliases (۱ تا ۳ مورد)، tools (۲ تا ۵ مورد)، skills (۳ تا ۵ مورد)، knowledge (۲ تا ۴ مورد)، "
+    "abilities (۲ تا ۴ مورد)، responsibilities (۳ تا ۵ مورد) و career_path_next (۱ تا ۳ مورد) را "
+    "به‌صورت رشته‌ای بنویس که موارد آن با کاراکتر | از هم جدا شده‌اند. تفکیک این سه را رعایت کن: "
+    "skills مهارت‌های آموختنی و عملی، knowledge حوزه‌های دانش نظری و تخصصی، و abilities توانایی‌های "
+    "ذاتی و شخصی؛ یک مورد را بین آنها تکرار نکن.\n"
     "3) description و work_context هرکدام یک یا دو جمله کامل فارسی باشند.\n"
     "4) همه محتوا باید مستقیماً از خواسته‌های کاربر ریشه بگیرد؛ ویژگی‌هایی که کاربر گفته را نادیده نگیر.\n"
     "5) شغل باید واقع‌گرایانه و قابل تحقق باشد؛ اگر درخواست کاربر خیالی یا اغراق‌آمیز بود، نزدیک‌ترین "
@@ -144,27 +149,35 @@ SYSTEM_JOB_GENERATE = (
     "7) از Markdown استفاده نکن و هیچ فیلدی را خالی نگذار."
 )
 
-EXPECTED_COLUMNS = ["job_title", "aliases", "tools", "skills",
+EXPECTED_COLUMNS = ["job_title", "aliases", "tools", "skills", "knowledge", "abilities",
                     "work_context", "career_path_next", "description", "responsibilities"]
 
 FIELD_LABELS = {
     "job_title": "عنوان شغل", "aliases": "نام‌های دیگر", "tools": "ابزارها",
-    "skills": "مهارت‌ها و شایستگی‌ها", "work_context": "محیط کاری",
+    "skills": "مهارت‌ها و شایستگی‌ها", "knowledge": "دانش تخصصی",
+    "abilities": "توانایی‌ها", "work_context": "محیط کاری",
     "career_path_next": "مسیر شغلی بعدی", "description": "شرح شغل",
     "responsibilities": "وظایف و مسئولیت‌ها",
 }
 
 INTENT_TO_FIELDS = {
     "description": ["description"], "responsibilities": ["responsibilities"],
-    "competencies": ["skills"], "tools": ["tools"], "career_path": ["career_path_next"],
+    # Persian «شایستگی/توانایی» covers learned skills and innate abilities alike,
+    # so this intent answers from both columns rather than picking one.
+    "competencies": ["skills", "abilities"], "knowledge": ["knowledge"],
+    "tools": ["tools"], "career_path": ["career_path_next"],
     "work_context": ["work_context"], "aliases": ["aliases"],
-    "general": ["description", "responsibilities", "skills", "tools"],
+    "general": ["description", "responsibilities", "skills", "knowledge", "abilities", "tools"],
 }
 
 INTENT_KEYWORDS = {
     "responsibilities": ["وظایف", "وظیفه", "مسئولیت", "روزمره", "کارها", "چه کاری", "چیکار", "چه کار"],
     "tools":            ["ابزار", "نرم‌افزار", "نرم افزار", "برنامه", "تجهیزات", "سیستم", "با چی"],
     "competencies":     ["مهارت", "شایستگی", "توانایی", "توانمندی", "ویژگی", "دقت", "استعداد", "باید بلد"],
+    # Multi-word forms on purpose: a bare «دانش» also matches دانشگاه/دانشجو/دانش‌آموز.
+    # Listed after competencies so «مهارت و دانش لازم» still answers from that pair.
+    "knowledge":        ["چه دانشی", "دانش لازم", "دانش مورد نیاز", "دانش تخصصی",
+                         "دانش فنی", "معلومات", "باید بداند", "چه بداند"],
     "career_path":      ["ارتقا", "ارتقاء", "آینده", "پیشرفت", "مسیر", "بعدش", "ترفیع", "رشد"],
     "work_context":     ["محیط", "فضا", "شرایط کاری", "کجا کار", "محل کار"],
     "aliases":          ["نام دیگر", "اسم دیگر", "معادل"],
@@ -201,8 +214,8 @@ DISCOVERY_UNAVAILABLE = ("امکان ساخت شغل پیشنهادی در ای�
                          "نزدیک‌ترین مشاغل موجود در پایگاه داده اینها هستند:")
 
 # Shown when a job is presented as a whole profile rather than as an answer to one intent
-DISCOVERY_FIELDS = ["description", "responsibilities", "skills", "tools",
-                    "work_context", "career_path_next"]
+DISCOVERY_FIELDS = ["description", "responsibilities", "skills", "knowledge", "abilities",
+                    "tools", "work_context", "career_path_next"]
 
 _MD_PATTERNS = [(re.compile(r"\*\*(.*?)\*\*"), r"\1"), (re.compile(r"\*(.*?)\*"), r"\1"),
                 (re.compile(r"`(.*?)`"), r"\1"), (re.compile(r"#{1,6}\s?"), "")]
@@ -252,6 +265,19 @@ def _parse_json_object(text):
     except (json.JSONDecodeError, ValueError):
         return None
     return obj if isinstance(obj, dict) else None
+
+
+def _corpus_fingerprint(*text_groups):
+    """Short digest of the embedding model plus every text that gets encoded. The
+    embedding cache is keyed on it, so editing a record or changing how combined_text
+    is assembled misses the cache instead of silently reusing the old vectors."""
+    digest = hashlib.sha256(EMBED_MODEL_NAME.encode("utf-8"))
+    for texts in text_groups:
+        for text in texts:
+            digest.update(text.encode("utf-8"))
+            digest.update(b"\x1f")
+        digest.update(b"\x1e")
+    return digest.hexdigest()[:12]
 
 
 def build_context(row, fields, include_title=True):
@@ -327,6 +353,8 @@ class JobQAEngine:
             f"{FIELD_LABELS['description']}: {row['description']}",
             f"{FIELD_LABELS['responsibilities']}: {row['responsibilities']}",
             f"{FIELD_LABELS['skills']}: {row['skills']}",
+            f"{FIELD_LABELS['knowledge']}: {row['knowledge']}",
+            f"{FIELD_LABELS['abilities']}: {row['abilities']}",
             f"{FIELD_LABELS['tools']}: {row['tools']}",
             f"{FIELD_LABELS['work_context']}: {row['work_context']}",
             f"{FIELD_LABELS['career_path_next']}: {row['career_path_next']}",
@@ -356,16 +384,20 @@ class JobQAEngine:
 
     def _load_or_build_embeddings(self, rebuild):
         os.makedirs(EMB_CACHE_DIR, exist_ok=True)
+        full_texts = self.df["combined_text"].tolist()
+        title_texts = self.df.apply(self._title_alias_text, axis=1).tolist()
+
         tag = EMBED_MODEL_NAME.replace("/", "_")
-        path = os.path.join(EMB_CACHE_DIR, f"corpus_{tag}_{len(self.df)}.npz")
+        fingerprint = _corpus_fingerprint(full_texts, title_texts)
+        path = os.path.join(EMB_CACHE_DIR, f"corpus_{tag}_{len(self.df)}_{fingerprint}.npz")
 
         if os.path.exists(path) and not rebuild:
             data = np.load(path)
             if {"full", "title"} <= set(data.files) and len(data["full"]) == len(self.df):
                 return data["full"], data["title"]
 
-        emb_full = self._encode(self.df["combined_text"].tolist(), "passage")
-        emb_title = self._encode(self.df.apply(self._title_alias_text, axis=1).tolist(), "passage")
+        emb_full = self._encode(full_texts, "passage")
+        emb_title = self._encode(title_texts, "passage")
         np.savez(path, full=emb_full, title=emb_title)
         return emb_full, emb_title
 

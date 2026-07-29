@@ -42,6 +42,8 @@ class JobIn(BaseModel):
     aliases: str = Field(min_length=1)
     tools: str = Field(min_length=1)
     skills: str = Field(min_length=1)
+    knowledge: str = Field(min_length=1)
+    abilities: str = Field(min_length=1)
     work_context: str = Field(min_length=1)
     career_path_next: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -53,6 +55,10 @@ class JobOut(JobIn):
     id: int
     status: str
     suggested_by: int | None
+    # Rows seeded before these columns existed hold ""; relaxing the inherited
+    # min_length keeps them listable while new suggestions still have to supply them.
+    knowledge: str = ""
+    abilities: str = ""
 
 
 class RebuildStatus(BaseModel):

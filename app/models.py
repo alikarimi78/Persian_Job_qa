@@ -36,6 +36,8 @@ class JobRecord(Base):
     aliases: Mapped[str] = mapped_column(Text, default="")
     tools: Mapped[str] = mapped_column(Text, default="")
     skills: Mapped[str] = mapped_column(Text, default="")
+    knowledge: Mapped[str] = mapped_column(Text, default="")
+    abilities: Mapped[str] = mapped_column(Text, default="")
     work_context: Mapped[str] = mapped_column(Text, default="")
     career_path_next: Mapped[str] = mapped_column(Text, default="")
     description: Mapped[str] = mapped_column(Text, default="")

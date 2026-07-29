@@ -8,39 +8,51 @@ A FastAPI backend that serves a Persian-language occupation Q&A service. `app/` 
 CRUD/auth/moderation layer over Postgres; the actual intelligence lives in the single module
 `job_qa_service.py` (a self-contained RAG engine). All user-facing strings are Persian.
 
-The dataset is O*NET data translated/summarized into Persian, flattened into **8 canonical columns**
+The dataset is O*NET data translated/summarized into Persian, flattened into **10 canonical columns**
 that recur in every layer (DB model, Pydantic schemas, engine, seed script):
 
 ```
-job_title, aliases, tools, skills, work_context, career_path_next, description, responsibilities
+job_title, aliases, tools, skills, knowledge, abilities,
+work_context, career_path_next, description, responsibilities
 ```
 
-Multi-value fields are single strings with `|` separators.
+Multi-value fields are single strings with `|` separators. `Merged_Occupations.xlsx` also carries
+`row_index` and `source` (provenance: 1014 O*NET-derived rows + 102 generated military ones) — both are
+bookkeeping and are deliberately dropped at seed time, since every reader projects onto its own column
+list rather than taking whatever the sheet holds.
 
-**The seed xlsx has drifted ahead of this schema.** `Merged_Occupations.xlsx` currently carries
-`knowledge`, `abilities`, `row_index` and `source` on top of the 8. Both readers project onto their own
-hardcoded column list (`scripts/seed_from_xlsx.py:COLUMNS`, `job_qa_service.py:EXPECTED_COLUMNS`), so the
-extra columns are **silently dropped at seed time** — `knowledge` and `abilities` are real content that
-never reaches the database or the embeddings. Adopting them means adding columns everywhere below plus a
-migration; until then, do not assume the xlsx and `jobs_info` hold the same fields.
-
-Adding or renaming a column means touching
-`app/models.py`, `app/schemas.py`, `app/engine_manager.py:_COLUMNS`, `scripts/seed_from_xlsx.py:COLUMNS`,
-`job_qa_service.py:EXPECTED_COLUMNS` / `FIELD_LABELS`, plus a migration.
+Adding or renaming a content column means touching all of: `app/models.py`, `app/schemas.py`
+(`JobIn` **and** `JobOut`), `app/engine_manager.py:_COLUMNS`, `scripts/seed_from_xlsx.py:COLUMNS`,
+`job_qa_service.py`'s `EXPECTED_COLUMNS` / `FIELD_LABELS` / `_combined_text` / `DISCOVERY_FIELDS` /
+`SYSTEM_JOB_GENERATE` (its JSON key list drives generated drafts), plus a migration. Missing any one of
+them fails quietly rather than loudly — a column absent from `_combined_text` is simply never embedded.
 
 ## Commands
 
 Local dev uses the checked-out `venv/` (Python 3.10). Always run from the repo root — `job_qa_service.py`
 is imported as a top-level module and `alembic.ini` relies on `prepend_sys_path = .`.
 
+**Invoke tools as `venv/bin/python3 -m <tool>`, never `venv/bin/<tool>`.** The venv was created at a
+different path, so every console script carries a stale shebang
+(`#!/home/ali/Desktop/sarbazi/venv/bin/python`) and dies with `bad interpreter`. `venv/bin/python3` itself
+is fine.
+
 ```bash
 venv/bin/python3 -m uvicorn app.main:app --reload --port 8000   # dev server; Swagger at /docs
-venv/bin/alembic upgrade head                                    # apply migrations
-venv/bin/alembic revision --autogenerate -m "describe change"     # after editing app/models.py
+venv/bin/python3 -m alembic upgrade head                         # apply migrations
+venv/bin/python3 -m alembic revision --autogenerate -m "describe change"  # after editing app/models.py
 venv/bin/python3 -m scripts.seed_from_xlsx Merged_Occupations.xlsx  # seed corpus + admin user
+venv/bin/python3 -m scripts.backfill_from_xlsx --dry-run          # preview a corpus sync
 venv/bin/python3 -m py_compile app/*.py app/routers/*.py job_qa_service.py scripts/*.py  # syntax check
 OCCUPATIONS_PATH=Merged_Occupations.xlsx venv/bin/python3 job_qa_service.py  # interactive engine REPL
 ```
+
+`seed_from_xlsx` is a first-run tool: it skips the dataset entirely once `jobs_info` holds any row, so it
+can never populate a column added later. `backfill_from_xlsx` is its counterpart for a live database — it
+fills `knowledge`/`abilities` where empty (matched on `job_title`), inserts dataset rows the database
+lacks as `approved`, leaves pending suggestions untouched, and is idempotent. `--overwrite` also replaces
+non-empty values; `--dry-run` reports and rolls back. Neither script refreshes the engine, so follow with
+`POST /admin/rebuild`.
 
 There is **no test suite, no pytest config, and no lint config** in this repo (Ruff is configured only
 through the JetBrains plugin). Do not invent test commands. The engine REPL above is the fastest way to
@@ -148,16 +160,17 @@ invalidates all of them.
 
 ### Embedding cache
 
-`_load_or_build_embeddings` caches to `emb_cache/corpus_{model}_{row_count}.npz` — the key is the model
-name and the **record count only**. Consequences worth remembering:
+`_load_or_build_embeddings` caches to `emb_cache/corpus_{model}_{row_count}_{fingerprint}.npz`, where the
+fingerprint is a sha256 digest (`_corpus_fingerprint`) over the embedding model name and every text that
+gets encoded. Keying on content rather than row count is deliberate: it means editing a record, or
+changing how `_combined_text` assembles a row, misses the cache automatically instead of serving vectors
+built from text that no longer exists. Nothing has to be invalidated by hand.
 
-- Any change to the number of approved records forces a full corpus re-encode of all ~1000 records.
-- Editing record *content* without changing the count silently reuses stale embeddings. Use
-  `POST /admin/rebuild` (which passes `rebuild_embeddings=True`) to force a rebuild.
-- The committed cache is `emb_cache/corpus_BAAI_bge-m3_1014.npz`, but `Merged_Occupations.xlsx` now has
-  1116 rows — **the cache is stale and will not be hit** by a fresh seed, so first startup re-encodes the
-  whole corpus. Regenerating it means running the engine once and committing the new `_1116.npz`. The
-  Dockerfile does not copy `emb_cache/` at all; containers rely on the mounted volume.
+- A miss re-encodes the whole corpus (~1100 records). Fast on GPU, slow on the container's CPU-only torch.
+- Superseded cache files are never deleted — `emb_cache/` accumulates one `.npz` per distinct corpus, so
+  prune it occasionally (each is ~9 MB).
+- `POST /admin/rebuild` passes `rebuild_embeddings=True`, which bypasses the cache read entirely.
+- The Dockerfile does not copy `emb_cache/`; containers rely on the mounted volume.
 
 ## `data_extactor/` — offline data pipeline
 

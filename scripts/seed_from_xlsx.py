@@ -11,7 +11,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models import User, Role, JobRecord, JobStatus
 
-COLUMNS = ["job_title", "aliases", "tools", "skills",
+COLUMNS = ["job_title", "aliases", "tools", "skills", "knowledge", "abilities",
            "work_context", "career_path_next", "description", "responsibilities"]
 
 
