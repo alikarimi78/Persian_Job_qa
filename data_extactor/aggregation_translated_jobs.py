@@ -27,8 +27,14 @@ def normalize_separators(val):
     val = re.sub(r'(\|\s*)+', '| ', val)
     return val.strip(' |')
 
+# ستون‌های چندمقداری؛ فقط در اینها ویرگول نقش جداکننده دارد. در ستون‌های نثر
+# (job_title، description، work_context) ویرگول علامت نگارشی است و نباید | شود.
+LIST_COLUMNS = {"aliases", "tools", "skills", "knowledge", "abilities",
+                "career_path_next", "responsibilities"}
+
 for col in merged_df.columns:
-    merged_df[col] = merged_df[col].apply(normalize_separators)
+    if str(col).strip().lower() in LIST_COLUMNS:
+        merged_df[col] = merged_df[col].apply(normalize_separators)
 
 output_path = "../scripts/Merged_Occupations.xlsx"
 merged_df.to_excel(output_path, index=False)

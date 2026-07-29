@@ -16,10 +16,17 @@ job_title, aliases, tools, skills, knowledge, abilities,
 work_context, career_path_next, description, responsibilities
 ```
 
-Multi-value fields are single strings with `|` separators. `Merged_Occupations.xlsx` also carries
-`row_index` and `source` (provenance: 1014 O*NET-derived rows + 102 generated military ones) — both are
-bookkeeping and are deliberately dropped at seed time, since every reader projects onto its own column
-list rather than taking whatever the sheet holds.
+Seven are **list columns** — `aliases`, `tools`, `skills`, `knowledge`, `abilities`, `career_path_next`,
+`responsibilities` — held as one string with `|` separators. The other three (`job_title`, `description`,
+`work_context`) are **prose**, where a comma is punctuation. That split matters: an early
+`data_extactor/aggregation_translated_jobs.py` pass ran the separator normalizer over *every* column and
+replaced commas with `|` in 1060 prose cells ("ارزیابی | تایید ... | مسکن"). The script now normalizes
+only the list columns, the dataset has been repaired, and `scripts/backfill_from_xlsx.py` fixes rows
+already stored with the damage. Never introduce `|` into the three prose columns.
+
+`Merged_Occupations.xlsx` also carries `row_index` and `source` (provenance: 1014 O*NET-derived rows +
+102 generated military ones) — both are bookkeeping and are deliberately dropped at seed time, since
+every reader projects onto its own column list rather than taking whatever the sheet holds.
 
 Adding or renaming a content column means touching all of: `app/models.py`, `app/schemas.py`
 (`JobIn` **and** `JobOut`), `app/engine_manager.py:_COLUMNS`, `scripts/seed_from_xlsx.py:COLUMNS`,
@@ -49,8 +56,9 @@ OCCUPATIONS_PATH=Merged_Occupations.xlsx venv/bin/python3 job_qa_service.py  # i
 
 `seed_from_xlsx` is a first-run tool: it skips the dataset entirely once `jobs_info` holds any row, so it
 can never populate a column added later. `backfill_from_xlsx` is its counterpart for a live database — it
-fills `knowledge`/`abilities` where empty (matched on `job_title`), inserts dataset rows the database
-lacks as `approved`, leaves pending suggestions untouched, and is idempotent. `--overwrite` also replaces
+fills `knowledge`/`abilities` where empty (matched on `job_title`, whose key tolerates the `،`/`|` drift),
+inserts dataset rows the database lacks as `approved`, repairs `|` left in the prose columns, leaves
+pending suggestions untouched, and is idempotent. `--overwrite` also replaces
 non-empty values; `--dry-run` reports and rolls back. Neither script refreshes the engine, so follow with
 `POST /admin/rebuild`.
 
