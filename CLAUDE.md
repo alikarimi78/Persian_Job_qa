@@ -186,6 +186,18 @@ from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the seed script, not by a migration.
   make the client parse the answer text back into a record. `_generate_job` also rewrites `|` to «،» in
   `PROSE_COLUMNS`, because a draft flows straight into `jobs_info` and a model reaching for the list
   separator in prose would reintroduce exactly the corruption the dataset was repaired of.
+- **Question path** — after retrieval, `_prefer_title_match()` may promote a runner-up whose *title*
+  shares content words with the question. Dense similarity put «خدمه توپخانه و موشک» (0.667) above
+  «افسران توپخانه و موشک» (0.650) for «وظایف افسر توپخانه چیست؟» — right unit, wrong rank — and the
+  answer then described the crew to someone asking about officers, or refused outright with «اطلاعات
+  کافی...» in 5 runs out of 6 because `SYSTEM_SINGLE` rule 6 read crew-vs-officer as unrelated. The
+  refusal was the symptom; the ranking was the bug. Matching is prefix-based in both directions so
+  «افسر» reaches «افسران», and the tiebreak is deliberately timid: it only considers candidates within
+  `TITLE_TIEBREAK_MARGIN` of the leader and requires a *strict* overlap improvement, so an unbeaten
+  leader or a no-overlap tie leaves the dense order alone. It is called only here, never in `_discover()`,
+  where a description of duties is matched against titles and the overlap would be noise. Rule 6 itself
+  was left alone: probed against six related-but-not-exact questions it refused none of them, so there is
+  no failing case to justify editing the prompt.
 - **Question path** — `detect_intent()` maps Persian keywords to which columns to feed the LLM
   (`INTENT_TO_FIELDS`); a short input with no question word is treated as a `description` request.
   Returns `mode: single` or `interdisciplinary` (two distinct top jobs with near-equal scores, or an

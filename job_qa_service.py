@@ -84,6 +84,16 @@ DISCOVERY_MATCH   = 0.60        # >= this: an existing job already covers the re
 DISCOVERY_FLOOR   = 0.35        # < this (and sparse weak too): out of domain, do not invent
 DISCOVERY_RELATED = 3           # neighbouring jobs shown to the user / fed to the generator
 
+# Question-path title tiebreak. Dense similarity ranks «خدمه توپخانه و موشک» (0.667)
+# above «افسران توپخانه و موشک» (0.650) for «وظایف افسر توپخانه چیست؟» — same unit,
+# wrong rank — so the answer describes the crew when the user asked about officers.
+# When the leaders are this close, a title that actually shares a content word with
+# the question is the better bet. Applied only in the question path: the discovery
+# path matches a description of duties against titles, where the overlap is noise.
+TITLE_TIEBREAK_MARGIN = 0.05    # dense gap within which titles may break the tie
+TITLE_TIEBREAK_DEPTH  = 4       # how deep to look for a better-titled candidate
+TITLE_TOKEN_MIN       = 4       # below this a token is an affix or stopword, not content
+
 LLM_MODEL    = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_BASE_URL = os.getenv("OPENAI_BASE_URL")
 LLM_API_KEY  = os.getenv("OPENAI_API_KEY")
@@ -311,6 +321,21 @@ def is_job_request(question):
     return any(p.search(question) for p in _JOB_REQUEST_RE)
 
 
+def _content_tokens(text):
+    """Content words of a question or a job title, with affixes and stopwords dropped."""
+    return {t for t in re.split(r"[\s،|/()\-–]+", text)
+            if len(t) >= TITLE_TOKEN_MIN} - QUESTION_WORDS
+
+
+def _title_overlap(q_tokens, title):
+    """How many content words a title shares with the question. Prefix matching in
+    both directions absorbs Persian plural and adjective suffixes, which is the whole
+    point here: «افسر» in the question has to reach «افسران» in the title."""
+    t_tokens = _content_tokens(title)
+    return sum(any(tt.startswith(qt) or qt.startswith(tt) for tt in t_tokens)
+               for qt in q_tokens)
+
+
 def _parse_json_object(text):
     """Extracts the first JSON object from an LLM reply; None if there is none.
     Tolerates the code fences and stray prose some models add around JSON."""
@@ -476,6 +501,29 @@ class JobQAEngine:
         order = [i for i, _ in sorted(rrf.items(), key=lambda x: x[1], reverse=True)]
         return order, dense, sparse
 
+    def _prefer_title_match(self, q_norm, order, dense):
+        """Promotes a near-tied candidate whose title shares more content words with
+        the question than the leader's does. Conservative by construction: it only
+        looks at candidates within TITLE_TIEBREAK_MARGIN of the leader, and it needs
+        a strict improvement, so an unbeaten leader and a no-overlap tie both keep
+        the dense ordering untouched."""
+        if len(order) < 2:
+            return order
+        lead = float(dense[order[0]])
+        close = [i for i in order[:TITLE_TIEBREAK_DEPTH]
+                 if lead - float(dense[i]) <= TITLE_TIEBREAK_MARGIN]
+        if len(close) < 2:
+            return order
+
+        q_tokens = _content_tokens(q_norm)
+        if not q_tokens:
+            return order
+        scored = [(_title_overlap(q_tokens, self.df.iloc[i]["job_title"]), i) for i in close]
+        best_n, best_i = max(scored, key=lambda s: s[0])
+        if best_i == order[0] or best_n <= scored[0][0]:
+            return order
+        return [best_i] + [i for i in order if i != best_i]
+
     # ---------- generation ----------
     def _llm(self, messages, temperature=0.3, max_tokens=700, clean=True):
         """API call with exponential backoff; returns '' on failure (caller falls
@@ -621,6 +669,7 @@ class JobQAEngine:
         fields = INTENT_TO_FIELDS.get(intent, INTENT_TO_FIELDS["general"])
 
         order, dense, sparse = self._retrieve(q)
+        order = self._prefer_title_match(q, order, dense)
         i1 = order[0]
         s1_dense, s1_sparse = float(dense[i1]), float(sparse[i1])
 
