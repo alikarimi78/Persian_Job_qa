@@ -154,10 +154,21 @@ class JobOut(JobIn):
     id: int
     status: str
     suggested_by: int | None
-    # Rows seeded before these columns existed hold ""; relaxing the inherited
-    # min_length keeps them listable while new suggestions still have to supply them.
-    knowledge: str = ""
-    abilities: str = ""
+
+
+# JobOut borrows JobIn's ten columns for their names and types, but must not inherit its
+# *input* rules. Those say a suggestion has to fill every column in; the database says no
+# such thing — a row can hold "" because it predates a column (knowledge/abilities before
+# migration 0002), or because it was written by a script rather than through the API. With
+# the constraints inherited, one such row made the whole listing fail response validation
+# and `GET /admin/suggestions` answered 500.
+#
+# Stripped in a loop over JobIn's fields rather than by redeclaring each column here: a
+# column added to JobIn later is covered automatically, instead of quietly bringing the
+# 500 back with it.
+for _column in JobIn.model_fields:
+    JobOut.model_fields[_column].metadata = []
+JobOut.model_rebuild(force=True)
 
 
 class RebuildStatus(BaseModel):

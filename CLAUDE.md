@@ -156,8 +156,9 @@ GET  /accounts                super_admin | org_admin | unit_admin   scoped, ?ro
 POST   /accounts/{id}/block · /unblock · /password     any admin, over accounts below them
 POST   /accounts/{id}/unit    super_admin | org_admin  move an account to another unit
 DELETE /accounts/{id}         any admin, over accounts below them
-POST /orgs · GET /orgs · GET /orgs/{id}          super_admin (org_admin reads its own)
-POST /units · GET /units · GET /units/{id}       super_admin | org_admin (unit_admin reads its own)
+POST /orgs · GET /orgs · GET /orgs/{id} · DELETE /orgs/{id}     super_admin (org_admin reads its own)
+POST /units · GET /units · GET /units/{id} · DELETE /units/{id} super_admin | org_admin
+                                                 (a unit_admin only *reads* its own unit)
 GET  /auth/me                 any account: role plus the organization/unit it sits in
 ```
 
@@ -216,7 +217,15 @@ Nothing here can strand the system without a super_admin: every one of these act
 downwards and nobody may act on their own account, so whoever performs the last such change is still
 standing afterwards.
 
-Not implemented, and absent on purpose rather than forgotten: deleting organizations and units, and a user
+**Deleting a unit or an organization requires it to be empty** — a unit of accounts (its admin included),
+an organization of both units and accounts — and answers 409 naming what is still in the way. There is no
+cascade on purpose: emptying it is the same work either way, and this way every account is deleted or
+moved by someone who looked at it, instead of one click taking out an organization's people. It also means
+the existing foreign keys are never violated, so deletion needed no migration of its own. Deleting a unit
+is closed to a unit_admin for the same reason creating one is: they staff the unit, they do not decide
+whether it exists.
+
+Not implemented, and absent on purpose rather than forgotten: renaming an organization or unit, and a user
 changing their own password (only an admin above them can, via `/accounts/{id}/password`, which
 deliberately does not ask for the old one — it exists for the account that cannot supply it).
 
@@ -262,6 +271,8 @@ migration; every other account comes from the API. Migration `0003` maps the old
   unit, delete (behind an inline confirmation, since it is the one irreversible action). It repeats the
   backend's rules in `canManage()` and `canMove()` purely so the table does not offer a button that would
   come back 403; the server is still the one enforcing them, and the pairs must be changed together.
+  Organizations and units get the same inline confirmation, and the page does not try to predict whether
+  one is empty — it asks, and shows the 409 the server answers with.
 
 Self-registration is gone from the client too (the page was deleted, `/` sits behind `Protected` now that
 `/search` needs a token, and the admin links test for `super_admin`). The styling of `/manage` is

@@ -32,7 +32,10 @@ its own. Blocking sets `is_active = false`: nothing is deleted, login is refused
 tokens issued earlier stop working at once. Deleting is irreversible, but the job
 records the account suggested stay in the corpus, unattributed. Moving an account
 between units is a super_admin / org_admin action, within one organization.
-The client for all of this is `/manage`.
+
+A unit can only be deleted once it holds no accounts, and an organization once it holds
+no units and no accounts — the API answers 409 saying what is still in the way, rather
+than cascading. The client for all of this is `/manage`.
 
 ## Endpoints
 | Method | Path | Access | Purpose |
@@ -42,8 +45,8 @@ The client for all of this is `/manage`.
 | POST | /search | logged-in | ask a question |
 | POST | /jobs/suggestions | logged-in | suggest a full record (pending) |
 | GET | /jobs/suggestions/mine | logged-in | my suggestions + statuses |
-| POST · GET | /orgs, /orgs/{id} | super_admin (org_admin reads own) | organizations |
-| POST · GET | /units, /units/{id} | super_admin · org_admin | units of an organization |
+| POST · GET · DELETE | /orgs, /orgs/{id} | super_admin (org_admin reads own) | organizations |
+| POST · GET · DELETE | /units, /units/{id} | super_admin · org_admin | units of an organization |
 | POST | /accounts/super-admins | super_admin | another super admin |
 | POST | /accounts/org-admins | super_admin | an organization's single admin |
 | POST | /accounts/unit-admins | super_admin · org_admin | a unit's single admin |

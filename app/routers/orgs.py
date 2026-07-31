@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from ..accounts import assert_manages_organization, get_organization
 from ..auth import require_roles, require_super_admin
 from ..database import get_db
-from ..models import Organization, Role, User
+from ..models import Organization, Role, Unit, User
 from ..schemas import OrganizationIn, OrganizationOut
 
 router = APIRouter(prefix="/orgs", tags=["organizations"])
@@ -40,3 +40,23 @@ def get_one(organization_id: int,
     org = get_organization(db, organization_id)
     assert_manages_organization(actor, organization_id)
     return org
+
+
+@router.delete("/{organization_id}", status_code=204,
+               dependencies=[Depends(require_super_admin)])
+def delete_organization(organization_id: int, db: Session = Depends(get_db)):
+    """Only an empty organization can go: its units and its admin have to be removed
+    first, deliberately. Emptying it is the same work either way — this way each
+    account and unit is deleted by someone who looked at it, instead of a cascade
+    taking out an entire organization's people on one click."""
+    org = get_organization(db, organization_id)
+    units = db.query(Unit).filter(Unit.organization_id == organization_id).count()
+    if units:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"Organization still has {units} unit(s); delete them first")
+    accounts = db.query(User).filter(User.organization_id == organization_id).count()
+    if accounts:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"Organization still has {accounts} account(s); delete them first")
+    db.delete(org)
+    db.commit()

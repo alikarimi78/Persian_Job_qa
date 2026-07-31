@@ -67,3 +67,22 @@ def get_one(unit_id: int,
     unit = get_unit(db, unit_id)
     assert_manages_unit(actor, unit)
     return unit
+
+
+@router.delete("/{unit_id}", status_code=204)
+def delete_unit(unit_id: int, actor: User = Depends(_manager), db: Session = Depends(get_db)):
+    """Only an empty unit can go — its admin included. Accounts are never deleted as a
+    side effect of deleting their container: move them (`POST /accounts/{id}/unit`) or
+    delete them first, so each one is a decision someone actually made.
+
+    Closed to a unit_admin, like creating a unit: they staff the unit, they do not
+    decide whether it exists.
+    """
+    unit = get_unit(db, unit_id)
+    assert_manages_unit(actor, unit)
+    accounts = db.query(User).filter(User.unit_id == unit_id).count()
+    if accounts:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"Unit still has {accounts} account(s); move or delete them first")
+    db.delete(unit)
+    db.commit()
