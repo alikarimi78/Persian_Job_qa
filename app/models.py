@@ -119,7 +119,12 @@ class JobRecord(Base):
     responsibilities: Mapped[str] = mapped_column(Text, default="")
 
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.pending, index=True)
-    suggested_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # SET NULL, not CASCADE: a job record belongs to the corpus, not to the person who
+    # proposed it. Deleting an account drops the attribution and keeps the record —
+    # which is also what lets an account be deleted at all once it has suggested one.
+    suggested_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    reviewed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

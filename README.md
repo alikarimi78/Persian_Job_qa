@@ -27,9 +27,12 @@ Swagger UI: http://localhost:8000/docs
 There is no self-registration; the first super admin comes from `ADMIN_USERNAME` /
 `ADMIN_PASSWORD` via the seed script, and every other account is created through the API.
 
-Each admin may block, unblock and re-password the accounts below it, but never its own.
-Blocking sets `is_active = false`: nothing is deleted, login is refused, and tokens
-issued earlier stop working at once. The client for all of this is `/manage`.
+Each admin may block, unblock, re-password and delete the accounts below it, but never
+its own. Blocking sets `is_active = false`: nothing is deleted, login is refused, and
+tokens issued earlier stop working at once. Deleting is irreversible, but the job
+records the account suggested stay in the corpus, unattributed. Moving an account
+between units is a super_admin / org_admin action, within one organization.
+The client for all of this is `/manage`.
 
 ## Endpoints
 | Method | Path | Access | Purpose |
@@ -48,6 +51,8 @@ issued earlier stop working at once. The client for all of this is `/manage`.
 | GET | /accounts | super_admin · org_admin · unit_admin | accounts in the caller's scope |
 | POST | /accounts/{id}/block · /unblock | any admin, downwards | refuse / restore login (`is_active`) |
 | POST | /accounts/{id}/password | any admin, downwards | set a new password for that account |
+| POST | /accounts/{id}/unit | super_admin · org_admin | move the account to another unit |
+| DELETE | /accounts/{id} | any admin, downwards | delete the account (its suggestions remain) |
 | GET | /admin/suggestions | super_admin | list pending records |
 | POST | /admin/suggestions/{id}/approve · /reject | super_admin | review |
 | POST | /admin/jobs | super_admin | add record directly (approved) |

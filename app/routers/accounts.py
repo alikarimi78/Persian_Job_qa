@@ -16,13 +16,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..accounts import (assert_can_manage_account, assert_manages_organization,
-                        assert_manages_unit, create_account, get_account, get_organization,
-                        get_unit, set_active, set_password, visible_users)
+                        assert_manages_unit, create_account, delete_account, get_account,
+                        get_organization, get_unit, move_to_unit, set_active, set_password,
+                        visible_users)
 from ..auth import require_roles, require_super_admin
 from ..database import get_db
 from ..models import Role, Unit, User
-from ..schemas import (AccountIn, OrgAdminIn, PasswordResetIn, UnitAdminIn, UserAccountIn,
-                       UserOut)
+from ..schemas import (AccountIn, MoveUnitIn, OrgAdminIn, PasswordResetIn, UnitAdminIn,
+                       UserAccountIn, UserOut)
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -102,6 +103,33 @@ def reset_password(user_id: int, body: PasswordResetIn, actor: User = Depends(_a
     target = get_account(db, user_id)
     assert_can_manage_account(actor, target)
     return set_password(db, target, body.password)
+
+
+@router.post("/{user_id}/unit", response_model=UserOut)
+def move_account(user_id: int, body: MoveUnitIn,
+                 actor: User = Depends(require_roles(Role.super_admin, Role.org_admin)),
+                 db: Session = Depends(get_db)):
+    """Moves an account into another unit, keeping its role.
+
+    Not open to a unit_admin: they run one unit, and moving someone across units is a
+    decision about two of them. The pair of checks below is what keeps an org_admin
+    inside their organization — they must manage both the account and the destination.
+    """
+    target = get_account(db, user_id)
+    assert_can_manage_account(actor, target)
+    unit = get_unit(db, body.unit_id)
+    assert_manages_unit(actor, unit)
+    return move_to_unit(db, target, unit)
+
+
+@router.delete("/{user_id}", status_code=204)
+def delete_account_endpoint(user_id: int, actor: User = Depends(_any_admin),
+                            db: Session = Depends(get_db)):
+    """Deletes an account below the caller. Anything it suggested stays in the corpus,
+    unattributed. Blocking is the reversible option; this one is not."""
+    target = get_account(db, user_id)
+    assert_can_manage_account(actor, target)
+    delete_account(db, target)
 
 
 @router.get("", response_model=list[UserOut])

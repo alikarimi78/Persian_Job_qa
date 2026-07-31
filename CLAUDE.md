@@ -153,7 +153,9 @@ POST /accounts/org-admins     super_admin                      one per organizat
 POST /accounts/unit-admins    super_admin | org_admin          one per unit
 POST /accounts/users          super_admin | unit_admin
 GET  /accounts                super_admin | org_admin | unit_admin   scoped, ?role=&unit_id=&organization_id=
-POST /accounts/{id}/block · /unblock · /password       any admin, over accounts below them
+POST   /accounts/{id}/block · /unblock · /password     any admin, over accounts below them
+POST   /accounts/{id}/unit    super_admin | org_admin  move an account to another unit
+DELETE /accounts/{id}         any admin, over accounts below them
 POST /orgs · GET /orgs · GET /orgs/{id}          super_admin (org_admin reads its own)
 POST /units · GET /units · GET /units/{id}       super_admin | org_admin (unit_admin reads its own)
 GET  /auth/me                 any account: role plus the organization/unit it sits in
@@ -181,8 +183,9 @@ may touch is a second check in the handler, against the target record — `accou
 refused a unit in someone else's organization. The role is re-read from the database on every request
 rather than trusted from the JWT, so a token minted before a change carries no stale rights.
 
-**Blocking and password reset** answer the same question as creation — may the caller act on this
-account — through `accounts.assert_can_manage_account`, which is the provisioning chain read downwards:
+**Blocking, password reset, moving and deletion** all answer the same question as creation — may the
+caller act on this account — through `accounts.assert_can_manage_account`, the provisioning chain read
+downwards:
 you may act on the accounts you could have created. An org_admin therefore reaches the unit admins and
 users of its own organization but not its peers; a unit_admin reaches only the ordinary users of its unit.
 **Nobody may act on their own account**, at any level: an admin who blocks themselves would need someone
@@ -195,9 +198,27 @@ request, so a token minted before the block dies with it instead of lasting out 
 inherited: blocking a unit_admin leaves that unit's users able to log in. A blocked account keeps its row,
 its unit and everything it has suggested; nothing is deleted.
 
-Not implemented, and absent on purpose rather than forgotten: deleting accounts, moving a user between
-units, and a user changing their own password (only an admin above them can, via `/accounts/{id}/password`,
-which deliberately does not ask for the old one — it exists for the account that cannot supply it).
+**Moving** (`POST /accounts/{id}/unit`) needs two permissions at once, and that pair is what keeps an
+org_admin inside their organization: `assert_can_manage_account` over the account plus `assert_manages_unit`
+over the destination. It is closed to a unit_admin on purpose — they run one unit, and a move is a decision
+about two of them. Only accounts that live in a unit can move (`user`, `unit_admin`; an org_admin belongs to
+an organization and a super_admin to nothing), the role is unchanged by the move, and a unit_admin may only
+land in a unit that has no admin — checked in `move_to_unit` so the answer is a 409 naming the sitting admin
+rather than an IntegrityError from the partial unique index.
+
+**Deletion** (`DELETE /accounts/{id}`) is the irreversible counterpart of blocking. It depends on migration
+`0005`: `jobs_info.suggested_by` / `reviewed_by` are `ON DELETE SET NULL`, so a record the deleted account
+suggested stays in the corpus and only loses its attribution. `SET NULL` and not `CASCADE` — an approved
+record is part of the dataset everyone searches and must not vanish because its author left. Without that
+rule the delete would simply fail on the foreign key for anyone who had ever suggested anything.
+
+Nothing here can strand the system without a super_admin: every one of these actions goes strictly
+downwards and nobody may act on their own account, so whoever performs the last such change is still
+standing afterwards.
+
+Not implemented, and absent on purpose rather than forgotten: deleting organizations and units, and a user
+changing their own password (only an admin above them can, via `/accounts/{id}/password`, which
+deliberately does not ask for the old one — it exists for the account that cannot supply it).
 
 ### Moderation flow
 
@@ -234,12 +255,13 @@ migration; every other account comes from the API. Migration `0003` maps the old
 
 - `src/pages/Manage.jsx` (`/manage`) is the provisioning chain as one page: which sections render depends
   on the caller's role, mirroring the API's permissions — organizations and super admins for a
-  super_admin, units for an org_admin, users for a unit_admin, and the account table with block / unblock
-  / reset-password for everyone who has one. It reads `GET /auth/me` for the caller's own scope, and
-  tolerates a 403 from `/orgs` because a unit_admin is not allowed to list organizations.
-  `src/components/AccountsTable.jsx` repeats `assert_can_manage_account`'s rule in `canManage()` purely so
-  the table does not offer a button that would come back 403 — the server is still the one enforcing it,
-  and the two must be changed together.
+  super_admin, units for an org_admin, users for a unit_admin, and the account table for everyone who has
+  one. It reads `GET /auth/me` for the caller's own scope, and tolerates a 403 from `/orgs` because a
+  unit_admin is not allowed to list organizations.
+  `src/components/AccountsTable.jsx` carries the row actions — block/unblock, reset password, move to a
+  unit, delete (behind an inline confirmation, since it is the one irreversible action). It repeats the
+  backend's rules in `canManage()` and `canMove()` purely so the table does not offer a button that would
+  come back 403; the server is still the one enforcing them, and the pairs must be changed together.
 
 Self-registration is gone from the client too (the page was deleted, `/` sits behind `Protected` now that
 `/search` needs a token, and the admin links test for `super_admin`). The styling of `/manage` is

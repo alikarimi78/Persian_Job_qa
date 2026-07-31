@@ -60,6 +60,11 @@ class UserAccountIn(AccountIn):
     unit_id: int | None = None
 
 
+class MoveUnitIn(BaseModel):
+    """Where to move an account that lives in a unit. Its role is unchanged by the move."""
+    unit_id: int
+
+
 class PasswordResetIn(BaseModel):
     """An admin setting a password for someone below them. The old password is not
     required — the point is to restore access to an account whose password is lost."""

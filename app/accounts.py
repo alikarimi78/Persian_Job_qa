@@ -80,6 +80,42 @@ def assert_can_manage_account(actor: User, target: User) -> None:
     raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient role")
 
 
+def delete_account(db: Session, target: User) -> None:
+    """Removes the account for good. Its job suggestions survive it — the foreign keys
+    are ON DELETE SET NULL (migration 0005), so the records stay in the corpus and only
+    lose their attribution.
+
+    Nothing here can strand the system without a super_admin: deletion goes strictly
+    downwards and nobody may delete themselves, so the last active super_admin — the one
+    doing the deleting — is always still standing afterwards.
+    """
+    db.delete(target)
+    db.commit()
+
+
+def move_to_unit(db: Session, target: User, unit: Unit) -> User:
+    """Moves an account to another unit, keeping its role.
+
+    Only accounts that live in a unit can move: an org_admin belongs to an organization
+    and a super_admin to none, so neither has anywhere to go. A unit_admin may move, but
+    only into a unit that has no admin yet — checked here so the caller gets a 409
+    naming the sitting admin rather than an IntegrityError from the unique index.
+    """
+    if target.unit_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"A {target.role.value} does not belong to a unit")
+    if target.role is Role.unit_admin and unit.id != target.unit_id:
+        taken = db.query(User).filter(User.role == Role.unit_admin,
+                                      User.unit_id == unit.id).first()
+        if taken:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                f"Unit already has an admin ({taken.username})")
+    target.unit_id = unit.id
+    db.commit()
+    db.refresh(target)
+    return target
+
+
 def set_active(db: Session, target: User, active: bool) -> User:
     target.is_active = active
     db.commit()
