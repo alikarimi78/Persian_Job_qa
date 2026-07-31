@@ -10,7 +10,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 RUN apt-get update && apt-get install -y vim iputils-ping curl
 
-COPY job_qa_service.py alembic.ini ./
+COPY alembic.ini ./
+COPY job_qa_service ./job_qa_service
 COPY alembic ./alembic
 COPY app ./app
 COPY scripts ./scripts

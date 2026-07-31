@@ -30,5 +30,6 @@ Swagger UI: http://localhost:8000/docs
 | POST | /admin/rebuild | admin | rebuild embeddings in background |
 | GET | /admin/rebuild/status | admin | rebuild progress/result |
 
-Note: place `job_qa_service.py` (the RAG engine module) in the project root;
-it needs the small DataFrame-input patch described in the delivery notes.
+Note: the RAG engine is the `job_qa_service/` package in the project root; it is
+imported as `from job_qa_service import JobQAEngine` and takes either a DataFrame
+(what the API passes it) or a path to the xlsx.

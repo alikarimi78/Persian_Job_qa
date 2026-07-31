@@ -5,8 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A FastAPI backend that serves a Persian-language occupation Q&A service. `app/` is a thin
-CRUD/auth/moderation layer over Postgres; the actual intelligence lives in the single module
-`job_qa_service.py` (a self-contained RAG engine). All user-facing strings are Persian.
+CRUD/auth/moderation layer over Postgres; the actual intelligence lives in the `job_qa_service/`
+package (a self-contained RAG engine, no dependency on `app/` in either direction). All user-facing
+strings are Persian.
 
 The dataset is O*NET data translated/summarized into Persian, flattened into **10 canonical columns**
 that recur in every layer (DB model, Pydantic schemas, engine, seed script):
@@ -30,8 +31,9 @@ every reader projects onto its own column list rather than taking whatever the s
 
 Adding or renaming a content column means touching all of: `app/models.py`, `app/schemas.py`
 (`JobIn` **and** `JobOut`), `app/engine_manager.py:_COLUMNS`, `scripts/seed_from_xlsx.py:COLUMNS`,
-`job_qa_service.py`'s `EXPECTED_COLUMNS` / `FIELD_LABELS` / `_combined_text` / `DISCOVERY_FIELDS`
-(which also feeds `DETAIL_FIELDS`, so the search result's per-field boxes follow along) /
+`job_qa_service/columns.py`'s `EXPECTED_COLUMNS` / `FIELD_LABELS` / `DISCOVERY_FIELDS`
+(which also feeds `DETAIL_FIELDS`, so the search result's per-field boxes follow along),
+`job_qa_service/engine.py:_combined_text`, `job_qa_service/prompts.py`'s
 `SYSTEM_JOB_GENERATE` (its JSON key list drives generated drafts), **the frontend's
 `src/components/JobForm.jsx`** (see below), plus a migration. Missing any one of them fails quietly rather
 than loudly — a column absent from `_combined_text` is simply never embedded, and one missing from
@@ -41,8 +43,8 @@ renders the sentence as a one-item list.
 
 ## Commands
 
-Local dev uses the checked-out `venv/` (Python 3.10). Always run from the repo root — `job_qa_service.py`
-is imported as a top-level module and `alembic.ini` relies on `prepend_sys_path = .`.
+Local dev uses the checked-out `venv/` (Python 3.10). Always run from the repo root — `job_qa_service/`
+is imported as a top-level package and `alembic.ini` relies on `prepend_sys_path = .`.
 
 **Invoke tools as `venv/bin/python3 -m <tool>`, never `venv/bin/<tool>`.** The venv was created at a
 different path, so every console script carries a stale shebang
@@ -55,8 +57,8 @@ venv/bin/python3 -m alembic upgrade head                         # apply migrati
 venv/bin/python3 -m alembic revision --autogenerate -m "describe change"  # after editing app/models.py
 venv/bin/python3 -m scripts.seed_from_xlsx Merged_Occupations.xlsx  # seed corpus + admin user
 venv/bin/python3 -m scripts.backfill_from_xlsx --dry-run          # preview a corpus sync
-venv/bin/python3 -m py_compile app/*.py app/routers/*.py job_qa_service.py scripts/*.py  # syntax check
-OCCUPATIONS_PATH=Merged_Occupations.xlsx venv/bin/python3 job_qa_service.py  # interactive engine REPL
+venv/bin/python3 -m py_compile app/*.py app/routers/*.py job_qa_service/*.py scripts/*.py  # syntax check
+OCCUPATIONS_PATH=Merged_Occupations.xlsx venv/bin/python3 -m job_qa_service  # interactive engine REPL
 ```
 
 `seed_from_xlsx` is a first-run tool: it skips the dataset entirely once `jobs_info` holds any row, so it
@@ -88,17 +90,18 @@ CPU wheel already satisfies `torch>=2.6,<2.8` and pip never pulls the CUDA build
 packages — which is exactly what the checked-out `venv/` has (`2.7.1+cu126`). Keep the Dockerfile's
 ordering when touching dependencies.
 
-The consequence for behavior: `job_qa_service.py` picks its device from `_HAS_CUDA`, so encoding may run
-on GPU locally and always runs on CPU in the container. Corpus re-encode timings measured locally are not
-representative of production.
+The consequence for behavior: `job_qa_service/engine.py` picks its device from `_HAS_CUDA`, so encoding
+may run on GPU locally and always runs on CPU in the container. Corpus re-encode timings measured
+locally are not representative of production.
 
 ## Configuration — two independent paths
 
 This is the most common source of confusion. Settings are read in two unrelated ways:
 
 1. `app/config.py` — a pydantic-settings `Settings` object for the web layer.
-2. `job_qa_service.py` — module-level `os.getenv(...)` constants (`OPENAI_API_KEY`, `OPENAI_BASE_URL`,
-   `LLM_MODEL`, `EMBED_MODEL_NAME`, `EMB_CACHE_DIR`) evaluated **at import time**.
+2. `job_qa_service/config.py` — module-level `os.getenv(...)` constants (`OPENAI_API_KEY`,
+   `OPENAI_BASE_URL`, `LLM_MODEL`, `EMBED_MODEL_NAME`, `EMB_CACHE_DIR`) evaluated **at import time**.
+   The two files have deliberately similar names and nothing to do with each other.
 
 Because of (2), everything must be present in the **real process environment**. Loading a `.env` through
 pydantic-settings would not reach the engine, and `Settings.Config.env_file = "../.env"` is a
@@ -156,7 +159,27 @@ from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the seed script, not by a migration.
   through `/login` (`Protected` passes the attempted location, login returns them to it), and the accepted
   draft has to survive that hop.
 
-### The engine (`job_qa_service.py`)
+### The engine (`job_qa_service/`)
+
+One package, imported as a top-level module (`from job_qa_service import JobQAEngine`). It was a single
+800-line file until it was split along its existing seams; the split moved code and renamed the helpers
+that crossed a module boundary, and changed no behavior — the corpus fingerprint is unchanged, so the
+embedding cache still hits.
+
+| module | holds |
+|---|---|
+| `config.py` | env vars read at import + every calibrated threshold |
+| `columns.py` | the ten columns and the projections of them (`DISCOVERY_FIELDS`, `DETAIL_FIELDS`, …) |
+| `prompts.py` / `messages.py` | Persian system prompts / fixed text the user reads |
+| `text.py` | `normalize_text`, `clean_markdown`, `parse_json_object`, `corpus_fingerprint` |
+| `intents.py` | `is_job_request`, `detect_intent`, and their keyword/pattern tables |
+| `bm25.py` / `ranking.py` | sparse channel / the question-path title tiebreak |
+| `llm.py` | `LLMClient`: the chat call that returns `""` instead of raising |
+| `render.py` | `build_context`, `template_one`/`template_two`, `render_draft`, `job_detail` |
+| `engine.py` | `JobQAEngine`: corpus, embeddings, retrieval, the two answer paths |
+
+`__init__.py` re-exports the public names and is where stdio is forced to UTF-8; `__main__.py` is the
+REPL, so the entrypoint is `python3 -m job_qa_service`.
 
 `answer()` branches on intent detection **before** retrieval:
 
@@ -186,17 +209,17 @@ from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the seed script, not by a migration.
   The sentinel is deliberately distinct from `None`: `None` means the API failed and still answers with
   `DISCOVERY_UNAVAILABLE`, so an outage is never reported to the user as "that isn't a real job".
 
-  A generated record is an **offer, not a decision**. `_render_draft` deliberately puts only the proposed
-  title and one-line description in `answer` and ends by asking the user whether to register it; the full
-  record rides along in `job_draft` for the client to prefill its suggestion form with. Nothing is stored
-  until the user submits that form (→ `pending`) and an admin approves it. Keep those two apart when
+  A generated record is an **offer, not a decision**. `render.render_draft` deliberately puts only the
+  proposed title and one-line description in `answer` and ends by asking the user whether to register
+  it; the full record rides along in `job_draft` for the client to prefill its suggestion form with.
+  Nothing is stored until the user submits that form (→ `pending`) and an admin approves it. Keep those two apart when
   editing: `answer` is the question, `job_draft` is the payload — don't move fields between them and don't
   make the client parse the answer text back into a record. `_generate_job` also rewrites `|` to «،» in
   `PROSE_COLUMNS`, because a draft flows straight into `jobs_info` and a model reaching for the list
   separator in prose would reintroduce exactly the corruption the dataset was repaired of.
-- **Question path** — after retrieval, `_prefer_title_match()` may promote a runner-up whose *title*
-  shares content words with the question. Dense similarity put «خدمه توپخانه و موشک» (0.667) above
-  «افسران توپخانه و موشک» (0.650) for «وظایف افسر توپخانه چیست؟» — right unit, wrong rank — and the
+- **Question path** — after retrieval, `ranking.prefer_title_match()` may promote a runner-up whose
+  *title* shares content words with the question. Dense similarity put «خدمه توپخانه و موشک» (0.667)
+  above «افسران توپخانه و موشک» (0.650) for «وظایف افسر توپخانه چیست؟» — right unit, wrong rank — and the
   answer then described the crew to someone asking about officers, or refused outright with «اطلاعات
   کافی...» in 5 runs out of 6 because `SYSTEM_SINGLE` rule 6 read crew-vs-officer as unrelated. The
   refusal was the symptom; the ranking was the bug. Matching is prefix-based in both directions so
@@ -212,9 +235,9 @@ from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the seed script, not by a migration.
   explicit «بین‌رشته‌ای»-style request).
 
 Every mode except `out_of_domain` also returns **`details`**: the matched record(s) column by column,
-built by `job_detail()`. This is the same data the prose was written from, handed over structured so the
-client can show it as one box per field. It does not replace `answer` and does not change it — the
-generated sentences stay exactly as they were, and the boxes sit under them.
+built by `render.job_detail()`. This is the same data the prose was written from, handed over
+structured so the client can show it as one box per field. It does not replace `answer` and does not
+change it — the generated sentences stay exactly as they were, and the boxes sit under them.
 
 - `primary` flags the columns the answer actually used — `INTENT_TO_FIELDS[intent]` on the question path,
   `DISCOVERY_PRIMARY` on the discovery path, which has no intent to key on because the user described a
@@ -230,32 +253,34 @@ generated sentences stay exactly as they were, and the boxes sit under them.
   they would be registering before accepting. That does not blur the `answer`/`job_draft` split above:
   `job_draft` is still the only thing posted to `/jobs/suggestions`, and `details` is still only shown.
 
-Retrieval (`_retrieve`) is hybrid: a weighted dense score over two embedding matrices (full record text
-`W_FULL` + title/alias text `W_TITLE`, `BAAI/bge-m3`, normalized so dot product is cosine) fused with a
-hand-rolled `BM25` class via Reciprocal Rank Fusion. BM25 scores are divided by the maximum a
-full-match document could reach, which is what keeps the sparse out-of-domain gate meaningful.
+Retrieval (`engine._retrieve`) is hybrid: a weighted dense score over two embedding matrices (full
+record text `W_FULL` + title/alias text `W_TITLE`, `BAAI/bge-m3`, normalized so dot product is cosine)
+fused with the hand-rolled `BM25` class in `bm25.py` via Reciprocal Rank Fusion. BM25 scores are divided
+by the maximum a full-match document could reach, which is what keeps the sparse out-of-domain gate
+meaningful.
 Out-of-domain requires **both** channels to be weak.
 
 Two properties to preserve when editing:
 
-- **Every LLM call degrades gracefully.** `_llm()` retries with exponential backoff and returns `""` on
-  any failure (or when no API key is set); each caller falls back to a plain-text template
-  (`_template_one` / `_template_two` / nearest-job list) so the endpoint never fails because the API did.
-- **Answers must be plain text.** The Persian system prompts forbid Markdown and `_clean_markdown()`
+- **Every LLM call degrades gracefully.** `llm.LLMClient` retries with exponential backoff and returns
+  `""` on any failure (or when no API key is set); each caller falls back to a plain-text template
+  (`render.template_one` / `template_two` / nearest-job list) so the endpoint never fails because the
+  API did.
+- **Answers must be plain text.** The Persian system prompts forbid Markdown and `text.clean_markdown()`
   strips it. JSON-returning calls pass `clean=False`, since stripping would corrupt them.
 
-The threshold constants near the top of the file (`THRESHOLD_MATCH`, `THRESHOLD_SPARSE`, `SECONDARY_MIN`,
+The threshold constants in `config.py` (`THRESHOLD_MATCH`, `THRESHOLD_SPARSE`, `SECONDARY_MIN`,
 `SECONDARY_MARGIN`, `PAIR_SIM_MAX`, `DISCOVERY_MATCH`, `DISCOVERY_FLOOR`) are calibrated for bge-m3 on
 this dataset and documented inline with the score ranges they assume. Changing the embedding model
 invalidates all of them.
 
 ### Embedding cache
 
-`_load_or_build_embeddings` caches to `emb_cache/corpus_{model}_{row_count}_{fingerprint}.npz`, where the
-fingerprint is a sha256 digest (`_corpus_fingerprint`) over the embedding model name and every text that
-gets encoded. Keying on content rather than row count is deliberate: it means editing a record, or
-changing how `_combined_text` assembles a row, misses the cache automatically instead of serving vectors
-built from text that no longer exists. Nothing has to be invalidated by hand.
+`engine._load_or_build_embeddings` caches to `emb_cache/corpus_{model}_{row_count}_{fingerprint}.npz`,
+where the fingerprint is a sha256 digest (`text.corpus_fingerprint`) over the embedding model name and
+every text that gets encoded. Keying on content rather than row count is deliberate: it means editing a
+record, or changing how `_combined_text` assembles a row, misses the cache automatically instead of
+serving vectors built from text that no longer exists. Nothing has to be invalidated by hand.
 
 - A miss re-encodes the whole corpus (~1100 records). Fast on GPU, slow on the container's CPU-only torch.
 - Superseded cache files are never deleted — `emb_cache/` accumulates one `.npz` per distinct corpus, so
