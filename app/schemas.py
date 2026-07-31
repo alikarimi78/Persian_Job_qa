@@ -21,6 +21,26 @@ class SearchIn(BaseModel):
     question: str = Field(min_length=1, max_length=500)
 
 
+class JobFieldOut(BaseModel):
+    """One dataset column of a matched record, ready to render as its own box.
+
+    `items` is a list column split on its «|» separators and is empty for the three
+    prose columns; `value` is display-ready either way (prose verbatim, a list joined
+    with «،»). `primary` marks the columns the answer text was actually written from —
+    what the question's intent asked for — so a client can open those and fold the rest.
+    """
+    key: str
+    label: str
+    value: str
+    items: list[str] = []
+    primary: bool = False
+
+
+class JobDetailOut(BaseModel):
+    job_title: str
+    fields: list[JobFieldOut]
+
+
 class SearchOut(BaseModel):
     mode: str
     intent: str
@@ -29,6 +49,10 @@ class SearchOut(BaseModel):
     jobs: list[str] | None = None
     score: float | None = None
     scores: list[float] | None = None
+    # The record(s) the answer came from, column by column. One entry for every mode
+    # but out_of_domain; two for 'interdisciplinary'. The prose in `answer` stays the
+    # answer — this is the underlying data, shown alongside it rather than instead of it.
+    details: list[JobDetailOut] | None = None
     # job-request modes: nearest existing titles, and (when mode == 'job_generated')
     # the proposed record in JobIn's shape. The answer asks the user to confirm it;
     # on confirmation the client prefills its form from here and POSTs to

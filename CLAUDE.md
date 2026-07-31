@@ -30,11 +30,14 @@ every reader projects onto its own column list rather than taking whatever the s
 
 Adding or renaming a content column means touching all of: `app/models.py`, `app/schemas.py`
 (`JobIn` **and** `JobOut`), `app/engine_manager.py:_COLUMNS`, `scripts/seed_from_xlsx.py:COLUMNS`,
-`job_qa_service.py`'s `EXPECTED_COLUMNS` / `FIELD_LABELS` / `_combined_text` / `DISCOVERY_FIELDS` /
+`job_qa_service.py`'s `EXPECTED_COLUMNS` / `FIELD_LABELS` / `_combined_text` / `DISCOVERY_FIELDS`
+(which also feeds `DETAIL_FIELDS`, so the search result's per-field boxes follow along) /
 `SYSTEM_JOB_GENERATE` (its JSON key list drives generated drafts), **the frontend's
 `src/components/JobForm.jsx`** (see below), plus a migration. Missing any one of them fails quietly rather
 than loudly — a column absent from `_combined_text` is simply never embedded, and one missing from
 `JobForm` makes every suggestion submit fail with a 422 that names a field the form has no input for.
+A column that is prose rather than a `|`-joined list also belongs in `PROSE_COLUMNS`; otherwise its box
+renders the sentence as a one-item list.
 
 ## Commands
 
@@ -141,6 +144,11 @@ from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the seed script, not by a migration.
 
 - `src/components/JobForm.jsx` holds the ten columns a second time, and backs both `POST /jobs/suggestions`
   and `POST /admin/jobs`. It is the one place outside this repo that a column change has to reach.
+- `src/components/JobDetails.jsx` renders the `details` payload of a search result as one collapsible box
+  per field, under the generated answer. It is deliberately *not* a third copy of the column list: labels,
+  order, list-splitting and which boxes open all arrive from the backend, so a new content column shows up
+  in the boxes on its own. The only thing it decides locally is shape — duties render as a bulleted list
+  because they are sentences, other list columns as chips, prose as a paragraph.
 - The discovery confirmation spans the two services. `Search.jsx` sees `mode: job_generated`, shows the
   offer with accept/decline buttons, and on accept stashes `job_draft` through `src/draft.js` before
   routing to `/suggest`, which prefills the editable form from it. The stash is sessionStorage rather than
@@ -202,6 +210,25 @@ from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the seed script, not by a migration.
   (`INTENT_TO_FIELDS`); a short input with no question word is treated as a `description` request.
   Returns `mode: single` or `interdisciplinary` (two distinct top jobs with near-equal scores, or an
   explicit «بین‌رشته‌ای»-style request).
+
+Every mode except `out_of_domain` also returns **`details`**: the matched record(s) column by column,
+built by `job_detail()`. This is the same data the prose was written from, handed over structured so the
+client can show it as one box per field. It does not replace `answer` and does not change it — the
+generated sentences stay exactly as they were, and the boxes sit under them.
+
+- `primary` flags the columns the answer actually used — `INTENT_TO_FIELDS[intent]` on the question path,
+  `DISCOVERY_PRIMARY` on the discovery path, which has no intent to key on because the user described a
+  job instead of asking about one facet of it. Those boxes are meant to be shown open, the rest folded,
+  and `job_detail` sorts them first so a client that ignores the flag still leads with the right field.
+- `items` splits a list column on its `|`; the three `PROSE_COLUMNS` get `[]`, since there a comma is
+  punctuation and the cell is one piece of text. `value` is display-ready either way — prose verbatim, a
+  list re-joined with «،» — so a client that never looks at `items` still cannot render a raw `|`.
+- Cells holding the dataset's «nothing here» placeholder (`EMPTY_CELLS`, mostly a bare `-`) are dropped
+  rather than rendered as an empty box. `DETAIL_FIELDS` is derived from `DISCOVERY_FIELDS`, so a new
+  content column reaches the boxes through that one list.
+- `mode: job_generated` gets `details` too, describing the *proposed* record so the user can read what
+  they would be registering before accepting. That does not blur the `answer`/`job_draft` split above:
+  `job_draft` is still the only thing posted to `/jobs/suggestions`, and `details` is still only shown.
 
 Retrieval (`_retrieve`) is hybrid: a weighted dense score over two embedding matrices (full record text
 `W_FULL` + title/alias text `W_TITLE`, `BAAI/bge-m3`, normalized so dot product is cosine) fused with a

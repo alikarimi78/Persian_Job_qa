@@ -282,6 +282,20 @@ NOT_A_JOB = object()
 DISCOVERY_FIELDS = ["description", "responsibilities", "skills", "knowledge", "abilities",
                     "tools", "work_context", "career_path_next"]
 
+# Column order of the per-field detail boxes that ride along with every answer
+# (`details`). job_title is absent on purpose: it heads the boxes rather than being
+# one. Derived from DISCOVERY_FIELDS so adding a content column reaches both.
+DETAIL_FIELDS = DISCOVERY_FIELDS + ["aliases"]
+
+# The discovery path has no intent to key the boxes on — the user described a job
+# instead of asking about one facet of it — so the profile leads with the two fields
+# that introduce a job and the rest of the record rides along behind them.
+DISCOVERY_PRIMARY = ["description", "responsibilities"]
+
+# What the dataset writes in a cell it has nothing for. A box rendering «-» is
+# worse than no box, so such a cell is treated as absent.
+EMPTY_CELLS = {"", "-", "–", "—", "_"}
+
 _MD_PATTERNS = [(re.compile(r"\*\*(.*?)\*\*"), r"\1"), (re.compile(r"\*(.*?)\*"), r"\1"),
                 (re.compile(r"`(.*?)`"), r"\1"), (re.compile(r"#{1,6}\s?"), "")]
 
@@ -372,6 +386,49 @@ def build_context(row, fields, include_title=True):
             lines.append(f"{FIELD_LABELS['aliases']}: {row['aliases']}")
     lines += [f"{FIELD_LABELS.get(f, f)}: {row.get(f, '')}" for f in fields if row.get(f, "")]
     return "\n".join(lines)
+
+
+def _field_items(field, value):
+    """Splits a list column into its members. The three PROSE_COLUMNS have none —
+    there a comma is punctuation, so the cell is one piece of text."""
+    if field in PROSE_COLUMNS:
+        return []
+    return [p.strip() for p in value.split("|")
+            if p.strip() and p.strip() not in EMPTY_CELLS]
+
+
+def job_detail(row, primary_fields):
+    """The record's own columns, structured for the client to render as one box per
+    field beside the generated prose. The answer text stays the answer; this is the
+    data it was written from, so a user who asked about tools can still open the
+    duties box without another request.
+
+    `primary_fields` are the columns the answer actually used — INTENT_TO_FIELDS for
+    a question, DISCOVERY_PRIMARY for a described job — and they are flagged and
+    sorted first so the client can show those boxes open and fold the rest away.
+
+    Per field: `items` is a list column split apart (empty for prose), and `value` is
+    always display-ready text — prose verbatim, a list joined with «،» so a client
+    that ignores `items` never shows the raw «|» separator.
+    """
+    primary = set(primary_fields)
+    fields = []
+    for key in DETAIL_FIELDS:
+        value = str(row.get(key, "") or "").strip()
+        if value in EMPTY_CELLS:
+            continue
+        items = _field_items(key, value)
+        if key not in PROSE_COLUMNS and not items:      # a list of nothing but «-»
+            continue
+        fields.append({
+            "key": key,
+            "label": FIELD_LABELS.get(key, key),
+            "value": "، ".join(items) if items else value,
+            "items": items,
+            "primary": key in primary,
+        })
+    fields.sort(key=lambda f: not f["primary"])          # stable: primary first, order kept
+    return {"job_title": str(row.get("job_title", "") or "").strip(), "fields": fields}
 
 
 # =========================================================
@@ -627,7 +684,8 @@ class JobQAEngine:
                 ans = f"{MATCH_HEADER}\n\n{self._template_one(row, DISCOVERY_FIELDS)}"
             return {"mode": "job_match", "intent": "job_request",
                     "job": row["job_title"], "score": s1_dense,
-                    "related_jobs": related, "answer": ans}
+                    "related_jobs": related, "answer": ans,
+                    "details": [job_detail(row, DISCOVERY_PRIMARY)]}
 
         draft = self._generate_job(question, order[:DISCOVERY_RELATED]) if use_llm else None
         if draft is NOT_A_JOB:
@@ -641,18 +699,25 @@ class JobQAEngine:
                     "score": s1_dense, "related_jobs": related,
                     "answer": DISCOVERY_UNAVAILABLE + "\n" + "\n".join(f"- {t}" for t in related)}
 
+        # `details` shows the proposal; `job_draft` is what gets submitted. Same
+        # content, different jobs: one is read by a person deciding, the other is
+        # posted verbatim to /jobs/suggestions.
         return {"mode": "job_generated", "intent": "job_request",
                 "job": draft["job_title"], "score": s1_dense,
                 "job_draft": draft, "related_jobs": related,
-                "answer": self._render_draft(draft, related)}
+                "answer": self._render_draft(draft, related),
+                "details": [job_detail(draft, DISCOVERY_PRIMARY)]}
 
     # ---------- public API ----------
     def answer(self, question, use_llm=True):
         """Answers one question. Returns a dict with keys:
         mode ('single'|'interdisciplinary'|'job_match'|'job_generated'|'out_of_domain'),
-        intent, answer, plus job/score fields depending on mode. 'job_generated' is an
-        offer the user still has to accept; it carries 'job_draft', the proposed record
-        in the dataset's own columns, for the client to prefill its form with."""
+        intent, answer, plus job/score fields depending on mode. Every mode but
+        out_of_domain also carries 'details': the matched record(s) column by column
+        (see job_detail), with the columns the answer was written from flagged
+        'primary'. 'job_generated' is an offer the user still has to accept; it carries
+        'job_draft', the proposed record in the dataset's own columns, for the client
+        to prefill its form with."""
         q = normalize_text(question)
 
         # A described spec is a different task from a question about a known job
@@ -705,7 +770,8 @@ class JobQAEngine:
                 ans = self._template_two(row1, row2, fields)
             return {"mode": "interdisciplinary", "intent": intent,
                     "jobs": [row1["job_title"], row2["job_title"]],
-                    "scores": [s1_dense, s2_dense], "answer": ans}
+                    "scores": [s1_dense, s2_dense], "answer": ans,
+                    "details": [job_detail(row1, fields), job_detail(row2, fields)]}
 
         ans = self._llm([
             {"role": "system", "content": SYSTEM_SINGLE},
@@ -715,7 +781,8 @@ class JobQAEngine:
         if not ans:
             ans = self._template_one(row1, fields)
         return {"mode": "single", "intent": intent, "job": row1["job_title"],
-                "score": s1_dense, "answer": ans}
+                "score": s1_dense, "answer": ans,
+                "details": [job_detail(row1, fields)]}
 
 
 # =========================================================
@@ -744,4 +811,8 @@ if __name__ == "__main__":
             print(f"jobs: {res['jobs'][0]} + {res['jobs'][1]}")
         if res.get("related_jobs"):
             print(f"related: {'، '.join(res['related_jobs'])}")
+        for detail in res.get("details", []):
+            opened = "، ".join(f["label"] for f in detail["fields"] if f["primary"])
+            folded = "، ".join(f["label"] for f in detail["fields"] if not f["primary"])
+            print(f"details [{detail['job_title']}] open: {opened} | folded: {folded}")
         print(f"\n🤖 {res['answer']}")
