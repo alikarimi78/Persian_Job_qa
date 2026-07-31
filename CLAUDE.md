@@ -152,8 +152,15 @@ from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the seed script, not by a migration.
 
 `answer()` branches on intent detection **before** retrieval:
 
-- **Job-request path** — `is_job_request()` matches Persian phrases like «شغلی می‌خواهم» (both ZWNJ and
-  plain-space spellings are listed, since user input is not normalized like the corpus). Routes to
+- **Job-request path** — `is_job_request()` decides this in two layers: a literal `JOB_REQUEST_KEYWORDS`
+  list of fixed idioms (both ZWNJ and plain-space spellings, since hazm leaves «میخوام» alone), plus
+  `_JOB_REQUEST_RE`, which generalizes them. The pattern layer keys on **indefiniteness** — «شغلی»,
+  «یه کاری» — because that is what separates wanting *a* job from asking about *the* job you named;
+  «یه کاری که توش ... کار کنم» is a request, «محیط کاری راننده زره‌پوش» is not. Two exclusions are load-bearing
+  and were both regressions caught in testing: «مناسب» is kept out of the desire verbs (it would swallow
+  «محیط کاری مناسب برای پرستار چیست؟») and «کار» is kept out of the «چه ...» interrogative (in «چه کاری
+  انجام می‌دهد؟» it means *task*, not *occupation*). Widening either one silently routes duties questions
+  into record generation. Routes to
   `_discover()`, which either returns an existing close match (`mode: job_match`, dense ≥ `DISCOVERY_MATCH`),
   or asks the LLM to design a brand-new record and returns it as `job_draft` (`mode: job_generated`) — a
   dict already shaped like `JobIn`. Below `DISCOVERY_FLOOR` on both channels it refuses to invent anything.
