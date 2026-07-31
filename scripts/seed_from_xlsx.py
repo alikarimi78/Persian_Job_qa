@@ -1,5 +1,5 @@
 """One-time seed: imports the xlsx dataset as approved records and creates the
-admin user from env. Usage (inside the api container or venv):
+bootstrap super admin from env. Usage (inside the api container or venv):
     python -m scripts.seed_from_xlsx Merged_Occupations.xlsx
 """
 import sys
@@ -19,11 +19,13 @@ def main(xlsx_path: str):
     # Schema must already exist: run `alembic upgrade head` first.
     db = SessionLocal()
     try:
+        # The bootstrap account: every other account is created through the API by the
+        # level above it, so the first super_admin has to come from somewhere else.
         if not db.query(User).filter(User.username == settings.ADMIN_USERNAME).first():
             db.add(User(username=settings.ADMIN_USERNAME,
                         hashed_password=hash_password(settings.ADMIN_PASSWORD),
-                        role=Role.admin))
-            print(f"Admin user '{settings.ADMIN_USERNAME}' created.")
+                        role=Role.super_admin))
+            print(f"Super admin '{settings.ADMIN_USERNAME}' created.")
 
         if db.query(JobRecord).count() == 0:
             df = pd.read_excel(xlsx_path)

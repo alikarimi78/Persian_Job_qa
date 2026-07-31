@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .engine_manager import manager
-from .routers import auth, search, jobs, admin
+from .routers import accounts, admin, auth, jobs, orgs, search, units
 
 log = logging.getLogger("main")
 
@@ -25,6 +25,9 @@ app.include_router(auth.router)
 app.include_router(search.router)
 app.include_router(jobs.router)
 app.include_router(admin.router)
+app.include_router(orgs.router)
+app.include_router(units.router)
+app.include_router(accounts.router)
 
 
 @app.get("/health", tags=["meta"])

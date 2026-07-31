@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_db
-from .models import User, Role
+from .models import Role, User
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -47,7 +47,15 @@ def get_current_user_optional(
     payload = _decode(credentials)
     if payload is None:
         return None
-    return db.get(User, int(payload["sub"]))
+    # Looked up rather than trusted from the token: the role, the org/unit scope and the
+    # blocked flag are all authorization input, and a token minted before a change must
+    # not keep old rights.
+    user = db.get(User, int(payload["sub"]))
+    if user is not None and not user.is_active:
+        # Checked here rather than only at login, so blocking takes effect at once
+        # instead of when the token happens to expire.
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Account is blocked")
+    return user
 
 
 def get_current_user(user: User | None = Depends(get_current_user_optional)) -> User:
@@ -56,7 +64,21 @@ def get_current_user(user: User | None = Depends(get_current_user_optional)) -> 
     return user
 
 
-def require_admin(user: User = Depends(get_current_user)) -> User:
-    if user.role != Role.admin:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
-    return user
+def require_roles(*roles: Role):
+    """Dependency factory gating an endpoint on the caller's role. Scope (*which*
+    organization or unit they may touch) is a separate check, done in the handler
+    against the target record — see `accounts.assert_can_manage_*`."""
+    allowed = set(roles)
+
+    def dependency(user: User = Depends(get_current_user)) -> User:
+        if user.role not in allowed:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient role")
+        return user
+
+    return dependency
+
+
+# The old single `admin` role became super_admin, so the job-moderation endpoints it
+# guarded are super-admin-only: approving a suggestion writes to the one global corpus
+# every organization searches, which is not an organization-level decision.
+require_super_admin = require_roles(Role.super_admin)

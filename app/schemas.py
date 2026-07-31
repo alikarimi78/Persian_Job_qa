@@ -1,11 +1,6 @@
 from pydantic import BaseModel, Field, ConfigDict
 
 
-class RegisterIn(BaseModel):
-    username: str = Field(min_length=3, max_length=64)
-    password: str = Field(min_length=8, max_length=128)
-
-
 class LoginIn(BaseModel):
     username: str
     password: str
@@ -15,6 +10,79 @@ class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
     role: str
+
+
+# ---------- tenancy: organizations and units ----------
+class OrganizationIn(BaseModel):
+    name: str = Field(min_length=2, max_length=128)
+
+
+class OrganizationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+
+
+class UnitIn(BaseModel):
+    name: str = Field(min_length=2, max_length=128)
+    # Required of a super_admin, who has no organization of their own to default to;
+    # an org_admin may omit it, and may not name any organization but their own.
+    organization_id: int | None = None
+
+
+class UnitOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    organization_id: int
+
+
+# ---------- accounts ----------
+class AccountIn(BaseModel):
+    """Credentials for an account someone else is creating. There is no self-service
+    registration: the scope (which organization or unit) comes from the endpoint and
+    the caller, never from the person being created."""
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class OrgAdminIn(AccountIn):
+    organization_id: int
+
+
+class UnitAdminIn(AccountIn):
+    unit_id: int
+
+
+class UserAccountIn(AccountIn):
+    # A unit_admin creates users in their own unit and may leave this out; a
+    # super_admin has to say which unit.
+    unit_id: int | None = None
+
+
+class PasswordResetIn(BaseModel):
+    """An admin setting a password for someone below them. The old password is not
+    required — the point is to restore access to an account whose password is lost."""
+    password: str = Field(min_length=8, max_length=128)
+
+
+class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    username: str
+    role: str
+    is_active: bool = True
+    # As stored: an org_admin carries organization_id, everyone below carries unit_id.
+    organization_id: int | None = None
+    unit_id: int | None = None
+
+
+class MeOut(UserOut):
+    """`role` plus where the caller sits, resolved: a unit_admin or user reaches their
+    organization through their unit, so `organization` is filled in for them here even
+    though the column is NULL."""
+    organization: OrganizationOut | None = None
+    unit: UnitOut | None = None
 
 
 class SearchIn(BaseModel):

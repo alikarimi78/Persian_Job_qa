@@ -1,13 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from ..auth import require_admin
+from ..auth import require_super_admin
 from ..database import get_db
 from ..engine_manager import manager
 from ..models import User, JobRecord, JobStatus
 from ..schemas import JobIn, JobOut, RebuildStatus
 
-router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_super_admin)])
 
 
 @router.get("/suggestions", response_model=list[JobOut])
@@ -30,18 +30,18 @@ def _review(job_id: int, new_status: JobStatus, admin: User, db: Session) -> Job
 
 
 @router.post("/suggestions/{job_id}/approve", response_model=JobOut)
-def approve(job_id: int, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+def approve(job_id: int, admin: User = Depends(require_super_admin), db: Session = Depends(get_db)):
     return _review(job_id, JobStatus.approved, admin, db)
 
 
 @router.post("/suggestions/{job_id}/reject", response_model=JobOut)
-def reject(job_id: int, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+def reject(job_id: int, admin: User = Depends(require_super_admin), db: Session = Depends(get_db)):
     return _review(job_id, JobStatus.rejected, admin, db)
 
 
 @router.post("/jobs", response_model=JobOut, status_code=201)
-def create_job(body: JobIn, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    """Admin adds a record directly; it is approved immediately."""
+def create_job(body: JobIn, admin: User = Depends(require_super_admin), db: Session = Depends(get_db)):
+    """A super_admin adds a record directly; it is approved immediately."""
     record = JobRecord(**body.model_dump(), status=JobStatus.approved,
                        suggested_by=admin.id, reviewed_by=admin.id)
     db.add(record)

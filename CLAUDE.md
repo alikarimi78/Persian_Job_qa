@@ -5,9 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A FastAPI backend that serves a Persian-language occupation Q&A service. `app/` is a thin
-CRUD/auth/moderation layer over Postgres; the actual intelligence lives in the `job_qa_service/`
-package (a self-contained RAG engine, no dependency on `app/` in either direction). All user-facing
-strings are Persian.
+CRUD/auth/moderation layer over Postgres, with an organization → unit → user hierarchy on top of it
+(see *Roles and tenancy*); the actual intelligence lives in the `job_qa_service/` package (a
+self-contained RAG engine, no dependency on `app/` in either direction). All user-facing strings are
+Persian.
 
 The dataset is O*NET data translated/summarized into Persian, flattened into **10 canonical columns**
 that recur in every layer (DB model, Pydantic schemas, engine, seed script):
@@ -132,13 +133,85 @@ There is one authoritative invariant: **the engine's corpus is exactly the `jobs
   explicit rebuild (or a restart).
 - `/search` wraps `engine.answer` in `run_in_threadpool` — encoding and the LLM call are blocking.
 
+### Roles and tenancy
+
+Two levels of tenancy — a **user** sits in a **unit**, a unit sits in an **organization** — and four
+roles, each provisioned by the one above it. **There is no self-registration**: `POST /auth/register` is
+gone, so every account exists because someone with authority created it, and every endpoint but
+`/health` requires a token (including `/search`, which was public before this).
+
+| role | scope column | creates |
+|---|---|---|
+| `super_admin` | none (sees everything) | organizations, their admins, further super admins |
+| `org_admin` | `users.organization_id` | the units of their own organization, and each unit's admin |
+| `unit_admin` | `users.unit_id` | the ordinary users of their own unit |
+| `user` | `users.unit_id` | nobody — searches and suggests jobs |
+
+```
+POST /accounts/super-admins   super_admin
+POST /accounts/org-admins     super_admin                      one per organization
+POST /accounts/unit-admins    super_admin | org_admin          one per unit
+POST /accounts/users          super_admin | unit_admin
+GET  /accounts                super_admin | org_admin | unit_admin   scoped, ?role=&unit_id=&organization_id=
+POST /accounts/{id}/block · /unblock · /password       any admin, over accounts below them
+POST /orgs · GET /orgs · GET /orgs/{id}          super_admin (org_admin reads its own)
+POST /units · GET /units · GET /units/{id}       super_admin | org_admin (unit_admin reads its own)
+GET  /auth/me                 any account: role plus the organization/unit it sits in
+```
+
+An org_admin deliberately **cannot** create ordinary users — it creates the units and their admins, and
+those admins staff their own unit. A super_admin may stand in at any level, but must then name the target
+(`organization_id`/`unit_id`) explicitly, since it has no scope of its own to default to.
+
+Three invariants are enforced by the database, not only by the handlers (`app/models.py:User.__table_args__`,
+mirrored in migration `0003`):
+
+- **One admin per organization and per unit** — partial unique indexes (`uq_users_org_admin`,
+  `uq_users_unit_admin`) over the scope column `WHERE role = '…_admin'`, so ordinary users still share a
+  unit freely. `accounts.create_account` checks first only to return a 409 that names the sitting admin.
+- **A role carries exactly its own scope column** — `ck_users_scope`. A unit_admin's organization is
+  reached through its unit and is never stored twice, so the two cannot drift; `User.scope_organization_id`
+  and `GET /auth/me` resolve it. The one deliberate hole: `role='user'` may have a NULL `unit_id`, because
+  rows predating this hierarchy have no unit to guess. New accounts always carry one.
+- **Usernames are global**, not per-tenant, because login is by username alone.
+
+`app/auth.py:require_roles(*roles)` gates *who* may call an endpoint; *which* organization or unit they
+may touch is a second check in the handler, against the target record — `accounts.assert_manages_organization`
+/ `assert_manages_unit`. Both are needed: an org_admin passes the role gate for `POST /units` and is then
+refused a unit in someone else's organization. The role is re-read from the database on every request
+rather than trusted from the JWT, so a token minted before a change carries no stale rights.
+
+**Blocking and password reset** answer the same question as creation — may the caller act on this
+account — through `accounts.assert_can_manage_account`, which is the provisioning chain read downwards:
+you may act on the accounts you could have created. An org_admin therefore reaches the unit admins and
+users of its own organization but not its peers; a unit_admin reaches only the ordinary users of its unit.
+**Nobody may act on their own account**, at any level: an admin who blocks themselves would need someone
+above them to undo it, and a unit_admin has nobody above them inside their unit.
+
+`is_active` is checked in two places on purpose. `routers/auth.py:login` refuses a blocked account with
+403 rather than the 401 given for a wrong password — the password *was* right, and the person needs to
+know to ask their admin instead of retrying. `auth.py:get_current_user_optional` checks it again on every
+request, so a token minted before the block dies with it instead of lasting out its hour. Blocking is not
+inherited: blocking a unit_admin leaves that unit's users able to log in. A blocked account keeps its row,
+its unit and everything it has suggested; nothing is deleted.
+
+Not implemented, and absent on purpose rather than forgotten: deleting accounts, moving a user between
+units, and a user changing their own password (only an admin above them can, via `/accounts/{id}/password`,
+which deliberately does not ask for the old one — it exists for the account that cannot supply it).
+
 ### Moderation flow
 
-Users register (`app/routers/auth.py`, JWT bearer via PyJWT + bcrypt) and submit complete records to
-`POST /jobs/suggestions`, which land as `pending`. Admins list and approve/reject them under `/admin/*`
-(the whole router is gated by `dependencies=[Depends(require_admin)]`; `_review` rejects any record that
-is not still `pending`). `POST /admin/jobs` inserts as `approved` directly. The admin account is created
-from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the seed script, not by a migration.
+Users submit complete records to `POST /jobs/suggestions`, which land as `pending`. They are reviewed
+under `/admin/*` (the whole router is gated by `dependencies=[Depends(require_super_admin)]`; `_review`
+rejects any record that is not still `pending`). `POST /admin/jobs` inserts as `approved` directly.
+
+Moderation is **super-admin-only**, including for org and unit admins: approving a suggestion writes into
+the one global corpus every organization searches, so it is not an organization-level decision. The
+tenancy scopes accounts, not job records — there is a single shared dataset.
+
+The first super admin is created from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the seed script, not by a
+migration; every other account comes from the API. Migration `0003` maps the old single `admin` role onto
+`super_admin`, so an existing deployment's admin keeps working.
 
 ### The client is a sibling repo
 
@@ -155,9 +228,22 @@ from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the seed script, not by a migration.
 - The discovery confirmation spans the two services. `Search.jsx` sees `mode: job_generated`, shows the
   offer with accept/decline buttons, and on accept stashes `job_draft` through `src/draft.js` before
   routing to `/suggest`, which prefills the editable form from it. The stash is sessionStorage rather than
-  router state because `/search` is public while `/jobs/suggestions` is not: an anonymous user is detoured
-  through `/login` (`Protected` passes the attempted location, login returns them to it), and the accepted
-  draft has to survive that hop.
+  router state so the accepted draft survives a redirect through `/login`. That detour is now rare — every
+  page including `/` is behind `Protected` since `/search` started requiring a token — but the stash still
+  earns its keep across an expired session.
+
+- `src/pages/Manage.jsx` (`/manage`) is the provisioning chain as one page: which sections render depends
+  on the caller's role, mirroring the API's permissions — organizations and super admins for a
+  super_admin, units for an org_admin, users for a unit_admin, and the account table with block / unblock
+  / reset-password for everyone who has one. It reads `GET /auth/me` for the caller's own scope, and
+  tolerates a 403 from `/orgs` because a unit_admin is not allowed to list organizations.
+  `src/components/AccountsTable.jsx` repeats `assert_can_manage_account`'s rule in `canManage()` purely so
+  the table does not offer a button that would come back 403 — the server is still the one enforcing it,
+  and the two must be changed together.
+
+Self-registration is gone from the client too (the page was deleted, `/` sits behind `Protected` now that
+`/search` needs a token, and the admin links test for `super_admin`). The styling of `/manage` is
+deliberately plain — it reuses the existing card/badge/table classes and is expected to be restyled.
 
 ### The engine (`job_qa_service/`)
 
