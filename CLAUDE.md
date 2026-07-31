@@ -31,8 +31,10 @@ every reader projects onto its own column list rather than taking whatever the s
 Adding or renaming a content column means touching all of: `app/models.py`, `app/schemas.py`
 (`JobIn` **and** `JobOut`), `app/engine_manager.py:_COLUMNS`, `scripts/seed_from_xlsx.py:COLUMNS`,
 `job_qa_service.py`'s `EXPECTED_COLUMNS` / `FIELD_LABELS` / `_combined_text` / `DISCOVERY_FIELDS` /
-`SYSTEM_JOB_GENERATE` (its JSON key list drives generated drafts), plus a migration. Missing any one of
-them fails quietly rather than loudly — a column absent from `_combined_text` is simply never embedded.
+`SYSTEM_JOB_GENERATE` (its JSON key list drives generated drafts), **the frontend's
+`src/components/JobForm.jsx`** (see below), plus a migration. Missing any one of them fails quietly rather
+than loudly — a column absent from `_combined_text` is simply never embedded, and one missing from
+`JobForm` makes every suggestion submit fail with a 422 that names a field the form has no input for.
 
 ## Commands
 
@@ -132,6 +134,20 @@ Users register (`app/routers/auth.py`, JWT bearer via PyJWT + bcrypt) and submit
 is not still `pending`). `POST /admin/jobs` inserts as `approved` directly. The admin account is created
 from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the seed script, not by a migration.
 
+### The client is a sibling repo
+
+`../job_qa_frontend` (React + Vite + react-router, its own git repo; `vite.config.js` proxies `/api` to
+`localhost:8000` in dev and nginx does it in production). Two things there are coupled to this repo:
+
+- `src/components/JobForm.jsx` holds the ten columns a second time, and backs both `POST /jobs/suggestions`
+  and `POST /admin/jobs`. It is the one place outside this repo that a column change has to reach.
+- The discovery confirmation spans the two services. `Search.jsx` sees `mode: job_generated`, shows the
+  offer with accept/decline buttons, and on accept stashes `job_draft` through `src/draft.js` before
+  routing to `/suggest`, which prefills the editable form from it. The stash is sessionStorage rather than
+  router state because `/search` is public while `/jobs/suggestions` is not: an anonymous user is detoured
+  through `/login` (`Protected` passes the attempted location, login returns them to it), and the accepted
+  draft has to survive that hop.
+
 ### The engine (`job_qa_service.py`)
 
 `answer()` branches on intent detection **before** retrieval:
@@ -140,8 +156,16 @@ from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the seed script, not by a migration.
   plain-space spellings are listed, since user input is not normalized like the corpus). Routes to
   `_discover()`, which either returns an existing close match (`mode: job_match`, dense ≥ `DISCOVERY_MATCH`),
   or asks the LLM to design a brand-new record and returns it as `job_draft` (`mode: job_generated`) — a
-  dict already shaped like `JobIn`, so a client can POST it straight to `/jobs/suggestions`. Below
-  `DISCOVERY_FLOOR` on both channels it refuses to invent anything.
+  dict already shaped like `JobIn`. Below `DISCOVERY_FLOOR` on both channels it refuses to invent anything.
+
+  A generated record is an **offer, not a decision**. `_render_draft` deliberately puts only the proposed
+  title and one-line description in `answer` and ends by asking the user whether to register it; the full
+  record rides along in `job_draft` for the client to prefill its suggestion form with. Nothing is stored
+  until the user submits that form (→ `pending`) and an admin approves it. Keep those two apart when
+  editing: `answer` is the question, `job_draft` is the payload — don't move fields between them and don't
+  make the client parse the answer text back into a record. `_generate_job` also rewrites `|` to «،» in
+  `PROSE_COLUMNS`, because a draft flows straight into `jobs_info` and a model reaching for the list
+  separator in prose would reintroduce exactly the corruption the dataset was repaired of.
 - **Question path** — `detect_intent()` maps Persian keywords to which columns to feed the LLM
   (`INTENT_TO_FIELDS`); a short input with no question word is treated as a `description` request.
   Returns `mode: single` or `interdisciplinary` (two distinct top jobs with near-equal scores, or an

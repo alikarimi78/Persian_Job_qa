@@ -10,7 +10,10 @@ with automatic template fallback on any API failure.
 A second entry path handles job *requests* ("شغلی می‌خواهم با این ویژگی‌ها..."):
 the described spec is retrieved against the corpus and either an existing close
 match is returned, or a brand-new occupation record is generated in the dataset's
-own 8-column shape, ready to be submitted as a suggestion.
+own 10-column shape. A generated record is an *offer*, not a decision: the answer
+names it and asks the user whether to register it, and the record itself is handed
+back in `job_draft` so the client can prefill its suggestion form with it. Storing
+it stays the user's call, and approving it stays the admin's.
 
 Backend usage:
     from job_qa_service import JobQAEngine
@@ -152,6 +155,12 @@ SYSTEM_JOB_GENERATE = (
 EXPECTED_COLUMNS = ["job_title", "aliases", "tools", "skills", "knowledge", "abilities",
                     "work_context", "career_path_next", "description", "responsibilities"]
 
+# The three columns where a comma is punctuation rather than a list separator;
+# everything else is a "|"-joined list. A generated draft is checked against this
+# before it leaves the engine, so a model reaching for "|" in prose cannot
+# reintroduce the corruption the dataset was repaired of.
+PROSE_COLUMNS = ["job_title", "description", "work_context"]
+
 FIELD_LABELS = {
     "job_title": "عنوان شغل", "aliases": "نام‌های دیگر", "tools": "ابزارها",
     "skills": "مهارت‌ها و شایستگی‌ها", "knowledge": "دانش تخصصی",
@@ -205,10 +214,11 @@ JOB_REQUEST_KEYWORDS = [
 OOD_MESSAGE = "متاسفانه در دیتابیس من اطلاعاتی درباره این موضوع پیدا نشد."
 
 MATCH_HEADER = "بر اساس ویژگی‌هایی که توصیف کردی، این شغل در پایگاه داده موجود است:"
-DRAFT_HEADER = ("شغلی که دقیقاً منطبق بر توصیف تو باشد در پایگاه داده موجود نیست؛ "
-                "بر اساس ویژگی‌هایی که گفتی، شغل زیر پیشنهاد می‌شود:")
-DRAFT_FOOTER = ("این عنوان و مشخصات پیشنهادی است و هنوز در پایگاه داده ثبت نشده؛ "
-                "در صورت تایید می‌توانی آن را به‌عنوان شغل جدید ثبت کنی.")
+DRAFT_HEADER = ("شغلی که دقیقاً منطبق بر توصیف تو باشد در پایگاه داده موجود نیست، "
+                "اما بر اساس ویژگی‌هایی که گفتی یک شغل پیشنهادی طراحی شد:")
+DRAFT_QUESTION = ("می‌خواهی این شغل را به‌عنوان شغل جدید ثبت کنی؟ در صورت تایید، فرم ثبت شغل با "
+                  "همین مشخصات باز می‌شود و می‌توانی پیش از ارسال آن‌ها را ویرایش کنی. "
+                  "ثبت نهایی پس از تایید ادمین انجام می‌شود.")
 RELATED_LABEL = "مشاغل مرتبط موجود در پایگاه داده"
 DISCOVERY_UNAVAILABLE = ("امکان ساخت شغل پیشنهادی در این لحظه فراهم نیست؛ "
                          "نزدیک‌ترین مشاغل موجود در پایگاه داده اینها هستند:")
@@ -473,18 +483,22 @@ class JobQAEngine:
         if obj is None:
             return None
         draft = {c: normalize_text(obj.get(c, "")) for c in EXPECTED_COLUMNS}
+        for col in PROSE_COLUMNS:
+            draft[col] = re.sub(r"\s*\|\s*", "، ", draft[col]).strip("، ")
         return draft if draft["job_title"] else None
 
     @staticmethod
     def _render_draft(draft, related):
-        """Formats a generated record in the same plain-text style as the templates,
-        so the answer looks identical whether it came from data or from the model."""
-        lines = [DRAFT_HEADER, "", f"📌 {FIELD_LABELS['job_title']}: {draft['job_title']}", ""]
-        lines += [f"{FIELD_LABELS[f]}: {draft[f].replace('|', '،')}"
-                  for f in ["aliases"] + DISCOVERY_FIELDS if draft.get(f)]
+        """Formats the *offer*: the proposal is summarized to its title and one-line
+        description, then the user is asked whether to register it. The full record
+        travels in `job_draft`, so a client fills its suggestion form from there
+        rather than parsing this text back apart."""
+        lines = [DRAFT_HEADER, "", f"📌 {FIELD_LABELS['job_title']}: {draft['job_title']}"]
+        if draft.get("description"):
+            lines.append(f"{FIELD_LABELS['description']}: {draft['description']}")
         if related:
             lines += ["", f"{RELATED_LABEL}: " + "، ".join(related)]
-        lines += ["", DRAFT_FOOTER]
+        lines += ["", DRAFT_QUESTION]
         return "\n".join(lines)
 
     def _discover(self, question, q_norm, use_llm=True):
@@ -529,8 +543,9 @@ class JobQAEngine:
     def answer(self, question, use_llm=True):
         """Answers one question. Returns a dict with keys:
         mode ('single'|'interdisciplinary'|'job_match'|'job_generated'|'out_of_domain'),
-        intent, answer, plus job/score fields depending on mode. 'job_generated' also
-        carries 'job_draft': the proposed record in the dataset's own columns."""
+        intent, answer, plus job/score fields depending on mode. 'job_generated' is an
+        offer the user still has to accept; it carries 'job_draft', the proposed record
+        in the dataset's own columns, for the client to prefill its form with."""
         q = normalize_text(question)
 
         # A described spec is a different task from a question about a known job
