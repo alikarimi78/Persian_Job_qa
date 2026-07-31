@@ -145,8 +145,10 @@ SYSTEM_JOB_GENERATE = (
     "ذاتی و شخصی؛ یک مورد را بین آنها تکرار نکن.\n"
     "3) description و work_context هرکدام یک یا دو جمله کامل فارسی باشند.\n"
     "4) همه محتوا باید مستقیماً از خواسته‌های کاربر ریشه بگیرد؛ ویژگی‌هایی که کاربر گفته را نادیده نگیر.\n"
-    "5) شغل باید واقع‌گرایانه و قابل تحقق باشد؛ اگر درخواست کاربر خیالی یا اغراق‌آمیز بود، نزدیک‌ترین "
-    "معادل واقعی و حرفه‌ای آن را طراحی کن.\n"
+    "5) اگر توصیف کاربر به هیچ شغل واقعی‌ای اشاره نمی‌کند — یعنی خیالی، افسانه‌ای، جادویی یا از نظر "
+    "فیزیکی ناممکن است — هیچ رکوردی نساز و خروجی تو دقیقاً همین باشد: {\"not_a_job\": true}\n"
+    "   آن را به نزدیک‌ترین معادل واقعی تبدیل نکن. اما سخت‌گیر نباش: شغل‌های نوپدید، تخصصی یا کم‌رایج "
+    "که در دنیای واقعی ممکن‌اند واقعی محسوب می‌شوند و باید برایشان رکورد بسازی.\n"
     "6) «مشاغل مشابه موجود» فقط برای الگوگرفتن از سبک نگارش و پرهیز از تکرارند؛ شغل جدید باید با آنها "
     "متفاوت باشد و رونویسی از آنها نباشد.\n"
     "7) از Markdown استفاده نکن و هیچ فیلدی را خالی نگذار."
@@ -215,8 +217,6 @@ JOB_REQUEST_KEYWORDS = [
     "می‌خواهم کار کنم", "میخوام کار کنم", "علاقه‌مند به کاری", "علاقه مند به کاری",
 ]
 
-OOD_MESSAGE = "متاسفانه در دیتابیس من اطلاعاتی درباره این موضوع پیدا نشد."
-
 # What actually marks a request is grammatical, not lexical: the thing being sought
 # is an *indefinite* job («شغلی», «یه کاری»), while a question names the job it asks
 # about («محیط کاری راننده زره‌پوش»). The phrase list above only ever caught the
@@ -246,6 +246,8 @@ _JOB_REQUEST_RE = [re.compile(p) for p in (
     rf"(?:چه|کدام|کدوم)\s+(?:شغل|حرفه|پیشه)",              # «چه شغلی», «کدام شغل»
 )]
 
+OOD_MESSAGE = "متاسفانه در دیتابیس من اطلاعاتی درباره این موضوع پیدا نشد."
+
 MATCH_HEADER = "بر اساس ویژگی‌هایی که توصیف کردی، این شغل در پایگاه داده موجود است:"
 DRAFT_HEADER = ("شغلی که دقیقاً منطبق بر توصیف تو باشد در پایگاه داده موجود نیست، "
                 "اما بر اساس ویژگی‌هایی که گفتی یک شغل پیشنهادی طراحی شد:")
@@ -255,6 +257,16 @@ DRAFT_QUESTION = ("می‌خواهی این شغل را به‌عنوان شغل
 RELATED_LABEL = "مشاغل مرتبط موجود در پایگاه داده"
 DISCOVERY_UNAVAILABLE = ("امکان ساخت شغل پیشنهادی در این لحظه فراهم نیست؛ "
                          "نزدیک‌ترین مشاغل موجود در پایگاه داده اینها هستند:")
+DISCOVERY_NOT_REAL = ("آنچه توصیف کردی به شغل واقعی‌ای اشاره نمی‌کند، بنابراین شغلی برای آن ساخته نشد؛ "
+                      "نزدیک‌ترین مشاغل موجود در پایگاه داده اینها هستند:")
+
+# Third outcome of generation, distinct from None: the model looked at the request
+# and judged that no real occupation matches it. Retrieval cannot make that call --
+# dense similarity is topical, so «تربیت اژدها» sits legitimately close to «مربیان
+# حیوانات» (measured 0.466, above DISCOVERY_FLOOR) while a real but niche request
+# like «عصاره‌گیری گیاهان دارویی» measures 0.515. The two ranges overlap, so no
+# threshold separates them; "is this a real job" is world knowledge, not geometry.
+NOT_A_JOB = object()
 
 # Shown when a job is presented as a whole profile rather than as an answer to one intent
 DISCOVERY_FIELDS = ["description", "responsibilities", "skills", "knowledge", "abilities",
@@ -503,8 +515,9 @@ class JobQAEngine:
     # ---------- job generation ----------
     def _generate_job(self, question, neighbour_idxs):
         """Designs a new occupation record from the user's spec. Returns a dict with
-        the dataset's own columns (so it can be stored as a suggestion), or None if
-        the API is unavailable or its reply is unusable."""
+        the dataset's own columns (so it can be stored as a suggestion), NOT_A_JOB if
+        the model judged the request to describe no real occupation, or None if the
+        API is unavailable or its reply is unusable."""
         reference = "\n\n".join(
             f"نمونه {n + 1}:\n{build_context(self.df.iloc[i], DISCOVERY_FIELDS)}"
             for n, i in enumerate(neighbour_idxs))
@@ -519,6 +532,10 @@ class JobQAEngine:
         obj = _parse_json_object(raw)
         if obj is None:
             return None
+        # Compared explicitly rather than by truthiness: the string "false" is truthy
+        flag = obj.get("not_a_job")
+        if flag is True or str(flag).strip().lower() == "true":
+            return NOT_A_JOB
         draft = {c: normalize_text(obj.get(c, "")) for c in EXPECTED_COLUMNS}
         for col in PROSE_COLUMNS:
             draft[col] = re.sub(r"\s*\|\s*", "، ", draft[col]).strip("، ")
@@ -565,6 +582,11 @@ class JobQAEngine:
                     "related_jobs": related, "answer": ans}
 
         draft = self._generate_job(question, order[:DISCOVERY_RELATED]) if use_llm else None
+        if draft is NOT_A_JOB:
+            # Refused on content, not availability -- say so rather than blaming the API
+            return {"mode": "out_of_domain", "intent": "job_request",
+                    "score": s1_dense, "related_jobs": related,
+                    "answer": DISCOVERY_NOT_REAL + "\n" + "\n".join(f"- {t}" for t in related)}
         if draft is None:
             # Generation needs the API; without it the nearest records are the best we have
             return {"mode": "out_of_domain", "intent": "job_request",

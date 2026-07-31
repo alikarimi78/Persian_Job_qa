@@ -165,6 +165,19 @@ from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the seed script, not by a migration.
   or asks the LLM to design a brand-new record and returns it as `job_draft` (`mode: job_generated`) — a
   dict already shaped like `JobIn`. Below `DISCOVERY_FLOOR` on both channels it refuses to invent anything.
 
+  **`DISCOVERY_FLOOR` is a cheap pre-filter, not the realism check.** Retrieval cannot tell a real
+  occupation the corpus lacks from a fictional one, because dense similarity is topical: «تربیت اژدها»
+  measures 0.466 against «مربیان حیوانات» while the real-but-niche «عصاره‌گیری گیاهان دارویی» measures
+  0.515, and across a probe set the two ranges overlap outright (real 0.479–0.693, fictional 0.416–0.526).
+  No threshold separates them — raising the floor only starts dropping legitimate requests. So the
+  judgment lives where the world knowledge is: `SYSTEM_JOB_GENERATE` rule 5 tells the model to return
+  `{"not_a_job": true}` for anything fictional, magical, or physically impossible, `_generate_job` turns
+  that into the `NOT_A_JOB` sentinel, and `_discover` answers with `DISCOVERY_NOT_REAL` plus the nearest
+  real jobs. That rule previously said the opposite — "design the nearest real equivalent" — which is how
+  a dragon-training request produced a full «پرورش‌دهنده اژدها» record headed for the moderation queue.
+  The sentinel is deliberately distinct from `None`: `None` means the API failed and still answers with
+  `DISCOVERY_UNAVAILABLE`, so an outage is never reported to the user as "that isn't a real job".
+
   A generated record is an **offer, not a decision**. `_render_draft` deliberately puts only the proposed
   title and one-line description in `answer` and ends by asking the user whether to register it; the full
   record rides along in `job_draft` for the client to prefill its suggestion form with. Nothing is stored
