@@ -29,6 +29,7 @@ Modules, roughly in dependency order:
     bm25        sparse channel;          ranking   the question-path title tiebreak
     llm         chat call that degrades to "" instead of raising
     render      context blocks, template answers, the per-field `details` payload
+    emb_store   one cached vector per text, so a rebuild encodes only what changed
     engine      JobQAEngine: corpus, embeddings, retrieval, the two answer paths
 
 Env vars (real process environment, not a .env): OPENAI_API_KEY, OPENAI_BASE_URL,

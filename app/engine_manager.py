@@ -52,15 +52,21 @@ class EngineManager:
             self._engine = new_engine
         log.info(f"Engine loaded with {len(df)} approved records.")
 
-    def rebuild_async(self) -> bool:
-        """Returns False if a rebuild is already running."""
+    def rebuild_async(self, force_embeddings: bool = False) -> bool:
+        """Returns False if a rebuild is already running.
+
+        Does *not* force a re-encode by default any more. The embedding store is keyed
+        on the text of each record (job_qa_service/emb_store.py), so a rebuild after an
+        approval encodes that record's two texts and reuses the other 2230; forcing
+        would encode all of them, which is the ~31 min this used to cost on CPU.
+        `force_embeddings` keeps that available for a store that has to be rewritten."""
         if self._rebuilding:
             return False
         self._rebuilding = True
 
         def _work():
             try:
-                self.load(rebuild_embeddings=True)
+                self.load(rebuild_embeddings=force_embeddings)
                 self.last_result = "success"
             except Exception as e:            # keep serving the old engine on failure
                 log.exception("Rebuild failed")

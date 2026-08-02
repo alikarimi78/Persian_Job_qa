@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Text utilities shared across the engine: normalization, Markdown stripping,
-tolerant JSON extraction, and the corpus digest the embedding cache is keyed on."""
+tolerant JSON extraction, and the digest that names a whole-corpus embedding cache."""
 
 import hashlib
 import json
@@ -52,9 +52,12 @@ def parse_json_object(text):
 
 
 def corpus_fingerprint(*text_groups):
-    """Short digest of the embedding model plus every text that gets encoded. The
-    embedding cache is keyed on it, so editing a record or changing how combined_text
-    is assembled misses the cache instead of silently reusing the old vectors."""
+    """Short digest of the embedding model plus every text that gets encoded.
+
+    This names the pre-per-row `corpus_*.npz` caches, which is all it is still used for:
+    `emb_store.adopt_corpus_cache` recomputes it to decide whether such a file belongs to
+    this exact corpus and can be imported. Live caching keys each vector on its own text
+    instead (`emb_store.text_key`), so one edited record no longer invalidates the rest."""
     digest = hashlib.sha256(EMBED_MODEL_NAME.encode("utf-8"))
     for texts in text_groups:
         for text in texts:

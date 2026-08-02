@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """JobQAEngine: corpus loading, embeddings, retrieval, and the two answer paths."""
 
-import os
 import re
+import threading
 from collections import defaultdict
 
 import numpy as np
@@ -12,10 +12,11 @@ from sentence_transformers import SentenceTransformer
 from .bm25 import BM25
 from .columns import (DISCOVERY_FIELDS, DISCOVERY_PRIMARY, EXPECTED_COLUMNS,
                       FIELD_LABELS, PROSE_COLUMNS)
-from .config import (DISCOVERY_FLOOR, DISCOVERY_MATCH, DISCOVERY_RELATED, EMB_CACHE_DIR,
+from .config import (DISCOVERY_FLOOR, DISCOVERY_MATCH, DISCOVERY_RELATED,
                      EMBED_MODEL_NAME, MAX_CANDIDATES, PAIR_SIM_MAX, RRF_K, SCAN_DEPTH,
                      SECONDARY_MARGIN, SECONDARY_MIN, THRESHOLD_MATCH, THRESHOLD_SPARSE,
                      W_FULL, W_TITLE)
+from .emb_store import store
 from .intents import (EXPLICIT_COMBO_WORDS, INTENT_TO_FIELDS, QUESTION_WORDS,
                       detect_intent, is_job_request)
 from .llm import LLMClient
@@ -24,7 +25,7 @@ from .prompts import (SYSTEM_INTERDISCIPLINARY, SYSTEM_JOB_GENERATE, SYSTEM_JOB_
                       SYSTEM_SINGLE)
 from .ranking import prefer_title_match
 from .render import build_context, job_detail, render_draft, template_one, template_two
-from .text import normalize_text, parse_json_object, corpus_fingerprint
+from .text import normalize_text, parse_json_object
 
 try:
     import torch
@@ -40,14 +41,33 @@ except Exception:
 # threshold separates them; "is this a real job" is world knowledge, not geometry.
 NOT_A_JOB = object()
 
+_MODEL_CACHE = {}
+_MODEL_LOCK = threading.Lock()
+
+
+def shared_model():
+    """The encoder, loaded once per process and shared by every engine instance.
+
+    A rebuild deliberately builds a *whole new engine* while the old one keeps serving
+    (app/engine_manager.py), so an encoder per engine means two copies of bge-m3 alive
+    at once — 2.2 GB each in fp32. On CPU that only wasted RAM; on a GPU it does not
+    fit beside the old one on a 4 GB card and the rebuild dies with CUDA OOM. The
+    weights are read-only and inference never mutates them, so one copy serves both,
+    and a rebuild no longer pays to reload the model either."""
+    device = "cuda" if _HAS_CUDA else "cpu"
+    key = (EMBED_MODEL_NAME, device)
+    with _MODEL_LOCK:
+        if key not in _MODEL_CACHE:
+            _MODEL_CACHE[key] = SentenceTransformer(EMBED_MODEL_NAME, device=device)
+        return _MODEL_CACHE[key]
+
 
 class JobQAEngine:
     def __init__(self, data, rebuild_embeddings=False):
         self.df = self._load_data(data)
         self.titles = self.df["job_title"].tolist()
 
-        device = "cuda" if _HAS_CUDA else "cpu"
-        self.model = SentenceTransformer(EMBED_MODEL_NAME, device=device)
+        self.model = shared_model()
         self.emb_full, self.emb_title = self._load_or_build_embeddings(rebuild_embeddings)
         self.bm25 = BM25(self.df["combined_text"].tolist())
         self.llm = LLMClient()
@@ -92,22 +112,24 @@ class JobQAEngine:
         return self.model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
 
     def _load_or_build_embeddings(self, rebuild):
-        os.makedirs(EMB_CACHE_DIR, exist_ok=True)
+        """Vectors for the whole corpus, encoding only the texts the store lacks.
+
+        `rebuild` is the escape hatch, not the normal path: the store is keyed on text
+        content, so an edited record misses the cache by itself and a rebuild after one
+        approval costs the two texts of that one record. Forcing re-encodes everything
+        and overwrites the store — for a corrupted store or a changed encoder, nothing
+        that happens on every approval."""
         full_texts = self.df["combined_text"].tolist()
         title_texts = self.df.apply(self._title_alias_text, axis=1).tolist()
 
-        tag = EMBED_MODEL_NAME.replace("/", "_")
-        fingerprint = corpus_fingerprint(full_texts, title_texts)
-        path = os.path.join(EMB_CACHE_DIR, f"corpus_{tag}_{len(self.df)}_{fingerprint}.npz")
+        def encode(texts):
+            return self._encode(texts, "passage")
 
-        if os.path.exists(path) and not rebuild:
-            data = np.load(path)
-            if {"full", "title"} <= set(data.files) and len(data["full"]) == len(self.df):
-                return data["full"], data["title"]
-
-        emb_full = self._encode(full_texts, "passage")
-        emb_title = self._encode(title_texts, "passage")
-        np.savez(path, full=emb_full, title=emb_title)
+        if not rebuild:
+            store.adopt_corpus_cache(full_texts, title_texts)
+        emb_full = store.embed(full_texts, encode, force=rebuild)
+        emb_title = store.embed(title_texts, encode, force=rebuild)
+        store.save()
         return emb_full, emb_title
 
     # ---------- retrieval ----------

@@ -51,10 +51,15 @@ def create_job(body: JobIn, admin: User = Depends(require_super_admin), db: Sess
 
 
 @router.post("/rebuild", status_code=202)
-def rebuild():
-    """Rebuilds embeddings from approved records in the background.
-    Search keeps serving the old engine until the new one atomically swaps in."""
-    if not manager.rebuild_async():
+def rebuild(force_embeddings: bool = False):
+    """Rebuilds the engine from approved records in the background.
+    Search keeps serving the old engine until the new one atomically swaps in.
+
+    Only the records whose text the embedding store has never seen are encoded, so
+    this is seconds after an approval rather than a full re-encode. `force_embeddings`
+    re-encodes the whole corpus and overwrites the store — minutes on GPU, ~31 min on
+    CPU — and is only for a store that has gone bad."""
+    if not manager.rebuild_async(force_embeddings=force_embeddings):
         raise HTTPException(status.HTTP_409_CONFLICT, "A rebuild is already running")
     return {"detail": "Rebuild started"}
 

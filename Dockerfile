@@ -2,10 +2,24 @@ FROM python:3.11-slim
 
 WORKDIR /srv
 
-# CPU torch keeps the image small; single-query encoding does not need a GPU.
+# torch comes from PyTorch's own index and BEFORE requirements.txt: this wheel already
+# satisfies torch>=2.6,<2.8, so pip never resolves torch off PyPI on its own. Keep the
+# ordering when touching dependencies.
+#
+# cu126 is the CUDA build. It cuts query encoding from ~155 ms to ~22 ms and a cold
+# corpus encode from ~31 min to ~4 min, and needs nothing from the application:
+# job_qa_service/engine.py picks its device from torch.cuda.is_available(), so this
+# same image runs on a GPU-less host too — just on CPU. It costs ~4.3 GB over the CPU
+# wheel (torch 1.6 GB + its nvidia-* deps 2.7 GB), so for a host that will never have a
+# GPU, build with --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu.
+# cu126 covers Pascal through Hopper; a Blackwell card would need cu128 instead.
+#
+# The GPU only reaches the container if the host has nvidia-container-toolkit AND the
+# compose service reserves a device (see docker-compose.yml in the deploy repo).
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cu126
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir torch==2.7.1 --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir torch==2.7.1 --index-url ${TORCH_INDEX}
 RUN pip install --no-cache-dir -r requirements.txt
 
 RUN apt-get update && apt-get install -y vim iputils-ping curl

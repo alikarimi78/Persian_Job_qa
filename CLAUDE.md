@@ -83,17 +83,24 @@ exercise retrieval and answer generation without the API or a database; `eval_qu
 setup it expects: a `postgres:16` service named `db`, `env_file: .env`, and named volumes for
 `/root/.cache/huggingface` and `/srv/emb_cache` (both caches are expensive to lose).
 
-### Torch: local and container environments differ
+### Torch: pinned to a CUDA build, on purpose
 
-The Dockerfile installs `torch==2.7.1` from the **PyTorch CPU index before** `requirements.txt`, so the
-CPU wheel already satisfies `torch>=2.6,<2.8` and pip never pulls the CUDA build. Running a bare
-`pip install -r requirements.txt` skips that step and drags in the CUDA wheel plus ~14 `nvidia-*`
-packages — which is exactly what the checked-out `venv/` has (`2.7.1+cu126`). Keep the Dockerfile's
-ordering when touching dependencies.
+The Dockerfile installs `torch==2.7.1` from a **PyTorch index before** `requirements.txt`, so that wheel
+already satisfies `torch>=2.6,<2.8` and pip never resolves torch off PyPI on its own. Keep the ordering
+when touching dependencies — the whole point of the line is that it wins the resolution.
 
-The consequence for behavior: `job_qa_service/engine.py` picks its device from `_HAS_CUDA`, so encoding
-may run on GPU locally and always runs on CPU in the container. Corpus re-encode timings measured
-locally are not representative of production.
+The index is `ARG TORCH_INDEX`, defaulting to `.../whl/cu126` (the same build the checked-out `venv/`
+has). The CPU-only image is one flag away:
+`docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu .`, worth ~4.3 GB of image
+(torch 1.6 GB + `nvidia-*` 2.7 GB) on a host that will never have a GPU. cu126 covers Pascal through
+Hopper; a Blackwell card needs cu128.
+
+`job_qa_service/engine.py` picks its device from `_HAS_CUDA`, so the same image encodes on the GPU where
+one is visible and on the CPU where it is not — nothing in the application changes, and a GPU-less host
+just runs the timings in the CPU row of *Encoding cost* below. The GPU reaches the container only if the
+host has `nvidia-container-toolkit` **and** the compose service reserves a device; that reservation
+lives in the deploy repo's `docker-compose.yml`, and a host without the toolkit will refuse to start the
+service at all rather than fall back — see *Encoding cost* for the install.
 
 ## Configuration — two independent paths
 
@@ -128,7 +135,9 @@ There is one authoritative invariant: **the engine's corpus is exactly the `jobs
   app still boots. `/search` then returns 503 until an engine exists, and `/health` reports `engine_ready`.
 - `POST /admin/rebuild` calls `rebuild_async()`, which builds a **whole new engine on a daemon thread**
   and atomically swaps it in under a lock. Reads keep serving the old engine throughout, and a failed
-  rebuild leaves the old one in place with the error recorded in `manager.last_result`.
+  rebuild leaves the old one in place with the error recorded in `manager.last_result`. The two engines
+  overlap in memory by design, which is why the encoder is shared and the embeddings are cached per text
+  rather than per corpus — see *Embedding cache*.
 - Approving a suggestion does **not** refresh the engine. A new record only becomes searchable after an
   explicit rebuild (or a restart).
 - `/search` wraps `engine.answer` in `run_in_threadpool` — encoding and the LLM call are blocking.
@@ -295,6 +304,7 @@ embedding cache still hits.
 | `bm25.py` / `ranking.py` | sparse channel / the question-path title tiebreak |
 | `llm.py` | `LLMClient`: the chat call that returns `""` instead of raising |
 | `render.py` | `build_context`, `template_one`/`template_two`, `render_draft`, `job_detail` |
+| `emb_store.py` | `EmbeddingStore`: one cached vector per text, so a rebuild encodes only what changed |
 | `engine.py` | `JobQAEngine`: corpus, embeddings, retrieval, the two answer paths |
 
 `__init__.py` re-exports the public names and is where stdio is forced to UTF-8; `__main__.py` is the
@@ -393,19 +403,83 @@ The threshold constants in `config.py` (`THRESHOLD_MATCH`, `THRESHOLD_SPARSE`, `
 this dataset and documented inline with the score ranges they assume. Changing the embedding model
 invalidates all of them.
 
-### Embedding cache
+### Embedding cache: one vector per text
 
-`engine._load_or_build_embeddings` caches to `emb_cache/corpus_{model}_{row_count}_{fingerprint}.npz`,
-where the fingerprint is a sha256 digest (`text.corpus_fingerprint`) over the embedding model name and
-every text that gets encoded. Keying on content rather than row count is deliberate: it means editing a
-record, or changing how `_combined_text` assembles a row, misses the cache automatically instead of
-serving vectors built from text that no longer exists. Nothing has to be invalidated by hand.
+`job_qa_service/emb_store.py` holds a `key -> vector` store in
+`emb_cache/vectors_{model}.npz`, where the key is `sha256(EMBED_MODEL_NAME + text)`.
+`engine._load_or_build_embeddings` asks it for the corpus and it encodes only the texts it has never
+seen. **A rebuild after one approval encodes 2 texts, not 2232** — measured 2.5 s, against 258 s on GPU
+and ~31 min on CPU before. Editing one record's description re-encodes that one text; a restart encodes
+nothing.
 
-- A miss re-encodes the whole corpus (~1100 records). Fast on GPU, slow on the container's CPU-only torch.
-- Superseded cache files are never deleted — `emb_cache/` accumulates one `.npz` per distinct corpus, so
-  prune it occasionally (each is ~9 MB).
-- `POST /admin/rebuild` passes `rebuild_embeddings=True`, which bypasses the cache read entirely.
+Keying on content is what makes that safe, and it is the same property the previous per-corpus cache
+had: a record whose text changed has a different key, so it misses automatically instead of serving
+vectors built from text that no longer exists. Nothing is invalidated by hand, and the vectors are
+bit-identical to the ones the old cache held — same model, same `normalize_embeddings=True` — so
+retrieval and every threshold in `config.py` mean exactly what they meant before.
+
+- The store is **two parallel arrays** (`keys`, `vectors`) in one npz, not one member per text: 2232 zip
+  members are slow to write, two are not. Saves are atomic (temp file + `os.replace`), so a crash or a
+  second process mid-write cannot leave a partial store.
+- It **retains superseded vectors** — an edited record's old vector stays, so reverting the edit is free.
+  It grows ~8 KB per record ever written, ~9.7 MB for this corpus; delete the file to compact it, at the
+  cost of one full re-encode.
+- `store.adopt_corpus_cache()` imports a matching pre-per-row `corpus_*.npz` if one is still in
+  `EMB_CACHE_DIR` — the old file's name is a digest of all its texts, so a name match *is* proof the
+  vectors belong to this corpus. Without it, the first boot after this change would re-encode a corpus
+  it already had good vectors for (31 min on CPU) and throw the deployed volume's cache away. Once
+  adopted, the `corpus_*.npz` files are dead weight and can be deleted.
+- `POST /admin/rebuild` **no longer forces a re-encode**; `?force_embeddings=true` still does, for a
+  store that has to be rewritten (a corrupted file, a changed encoder). `rebuild_async()` used to pass
+  `rebuild_embeddings=True` unconditionally, which is what made every approval cost a full re-encode.
+- `EMB_CACHE_DIR` is created at first use rather than at save time, so an unwritable cache dir fails
+  before the encoding rather than after it.
 - The Dockerfile does not copy `emb_cache/`; containers rely on the mounted volume.
+
+**One encoder per process.** `engine.shared_model()` memoizes the `SentenceTransformer` on
+`(model, device)`. A rebuild builds a whole new engine while the old one keeps serving, so loading it
+per engine meant two copies of bge-m3 alive at once — 2.2 GB each in fp32. On CPU that only wasted RAM;
+with the CUDA image it does not fit beside the old one on a 4 GB card and **the rebuild dies with CUDA
+OOM** (observed on the dev GTX 1050). The weights are read-only and inference never mutates them, so
+one copy serves both engines, and a rebuild no longer reloads the model either.
+
+### Encoding cost: what was measured, and what each fix bought (2026-08-02)
+
+Both fixes below are implemented. The measurements are kept because they are what the thresholds of the
+argument rest on, and because the *before* column is what a regression would look like.
+
+Measured on the dev machine (GTX 1050 4 GB, 8 CPU cores) over the real corpus — 1116 records, which is
+2232 texts because every record is encoded twice (`_combined_text` + `_title_alias_text`):
+
+| | one search query | full corpus re-encode |
+|---|---|---|
+| GPU | 22 ms | **258 s** (measured) |
+| CPU | 155 ms | **~1874 s ≈ 31 min** (extrapolated from 200 texts) |
+
+Two separate costs with two different fixes:
+
+**A. Approving one suggestion cost a full re-encode** — O(n) work for an O(1) change. Fixed by the
+per-row store (*Embedding cache* above): 2 texts, 2.5 s. This is the fix that mattered; a GPU alone
+would have made the same wrong work 7× faster.
+
+**B. Search latency** — every `/search` encodes the question. Fixed by the CUDA image: 155 ms → 22 ms,
+per request.
+
+Verified end to end against the real corpus before commit: the old cache is adopted with 0 re-encodes
+and vectors bit-identical to it, a restart encodes nothing, a new record encodes 2 texts, an edited
+description 1, `force_embeddings` still encodes all 2232 — and «وظایف افسر توپخانه چیست؟» still answers
+from «افسران توپخانه و موشک» at 0.650, the same score as before the change.
+
+**Still unknown about production:** which GPU it has and how much VRAM (bge-m3 wants ~2.2 GB in fp32,
+and one encoder is now shared rather than one per engine — see *Embedding cache*), and whether the host
+has `nvidia-container-toolkit`. The dev machine does **not** have the toolkit
+(`docker info` lists only `runc`), so the compose device reservation has to be installed for before
+`docker compose up` will start the api service there:
+`sudo apt install nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`.
+None of that blocks the image: without a visible GPU the engine runs on CPU by itself.
+
+A third possible reading of "slow build" — `docker build` itself — is untouched and would be a separate
+problem (layer ordering and pip caching), made worse by CUDA's 4.3 GB of wheels.
 
 ## `data_extactor/` — offline data pipeline
 
