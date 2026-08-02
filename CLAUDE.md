@@ -255,17 +255,43 @@ migration; every other account comes from the API. Migration `0003` maps the old
 ### The client is a sibling repo
 
 `../job_qa_frontend` (React + Vite + react-router, its own git repo; `vite.config.js` proxies `/api` to
-`localhost:8000` in dev and nginx does it in production). Two things there are coupled to this repo:
+`localhost:8000` in dev and nginx does it in production).
+
+Its look and its architecture were both replaced to match a design the customer supplied — eight
+reference `.tsx` files plus the logos and photographs, kept in the client repo's `style_files/`. That is
+the source of truth for the chrome: a dark slate header, an RTL glass sidebar, `blue-50→indigo-100`
+behind the content, and the login card over the campus photograph. The port brought the stack with it:
+**Tailwind v4** (`@tailwindcss/vite`, no config file; `styles.css` is `@import "tailwindcss"` plus a
+`@theme` naming Vazirmatn), **Redux Toolkit + redux-persist + RTK Query**, **react-hook-form** and
+**react-hot-toast**, under the reference's own path aliases (`@components`, `@store`, `@services`,
+`@hook`, `@utils`, `@constant`, `@assets`, `@routes`, `@pages`, declared in `vite.config.js`).
+
+`src/services/*Api.js` is now the whole API surface — one `injectEndpoints` file per router here, over a
+`fetchBaseQuery` that reads the token out of the store and clears the session on a 401. `axios` and the
+old `src/api.js` / `src/auth.jsx` are gone; the session lives in `store/slices/authSlice.js` and is the
+only thing persisted (the query cache deliberately is not).
+
+Three places where the reference could not be followed literally, because this backend is not the one it
+was written for: login posts JSON (`LoginIn`), not `FormData`; the sidebar gates on **role**
+(`routes/roles.js:hasRole`) because there is no permission endpoint to fetch; and the header dropdown
+shows username / role / organization / unit from `GET /auth/me`, because `UserOut` has no name, gender or
+company to build the reference's profile links from. The reference's desktop dropdown is also anchored
+`right-0`, which in RTL hangs it off the side of the page — it is anchored `left-0` here, as the
+reference's own mobile header already does.
+
+Two things in the client are coupled to this repo:
 
 - `src/components/JobForm.jsx` holds the ten columns a second time, and backs both `POST /jobs/suggestions`
-  and `POST /admin/jobs`. It is the one place outside this repo that a column change has to reach.
+  and `POST /admin/jobs`. It is the one place outside this repo that a column change has to reach. The
+  «|» rule is stated once by the page's card and demonstrated by each list column's placeholder, rather
+  than repeated under every field.
 - `src/components/JobDetails.jsx` renders the `details` payload of a search result as one collapsible box
   per field, under the generated answer. It is deliberately *not* a third copy of the column list: labels,
   order, list-splitting and which boxes open all arrive from the backend, so a new content column shows up
   in the boxes on its own. The only thing it decides locally is shape — duties render as a bulleted list
   because they are sentences, other list columns as chips, prose as a paragraph.
 - The discovery confirmation spans the two services. `Search.jsx` sees `mode: job_generated`, shows the
-  offer with accept/decline buttons, and on accept stashes `job_draft` through `src/draft.js` before
+  offer with accept/decline buttons, and on accept stashes `job_draft` through `src/utils/draft.js` before
   routing to `/suggest`, which prefills the editable form from it. The stash is sessionStorage rather than
   router state so the accepted draft survives a redirect through `/login`. That detour is now rare — every
   page including `/` is behind `Protected` since `/search` started requiring a token — but the stash still
@@ -274,8 +300,8 @@ migration; every other account comes from the API. Migration `0003` maps the old
 - `src/pages/Manage.jsx` (`/manage`) is the provisioning chain as one page: which sections render depends
   on the caller's role, mirroring the API's permissions — organizations and super admins for a
   super_admin, units for an org_admin, users for a unit_admin, and the account table for everyone who has
-  one. It reads `GET /auth/me` for the caller's own scope, and tolerates a 403 from `/orgs` because a
-  unit_admin is not allowed to list organizations.
+  one. It reads `GET /auth/me` for the caller's own scope, and *skips* `/orgs` for a unit_admin rather
+  than catching the 403 it would answer with.
   `src/components/AccountsTable.jsx` carries the row actions — block/unblock, reset password, move to a
   unit, delete (behind an inline confirmation, since it is the one irreversible action). It repeats the
   backend's rules in `canManage()` and `canMove()` purely so the table does not offer a button that would
@@ -283,9 +309,8 @@ migration; every other account comes from the API. Migration `0003` maps the old
   Organizations and units get the same inline confirmation, and the page does not try to predict whether
   one is empty — it asks, and shows the 409 the server answers with.
 
-Self-registration is gone from the client too (the page was deleted, `/` sits behind `Protected` now that
-`/search` needs a token, and the admin links test for `super_admin`). The styling of `/manage` is
-deliberately plain — it reuses the existing card/badge/table classes and is expected to be restyled.
+Self-registration is gone from the client too (the page was deleted, and every route but `/login` sits
+inside `MainLayout` behind `Protected` now that `/search` needs a token).
 
 ### The engine (`job_qa_service/`)
 
