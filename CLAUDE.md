@@ -70,10 +70,31 @@ pending suggestions untouched, and is idempotent. `--overwrite` also replaces
 non-empty values; `--dry-run` reports and rolls back. Neither script refreshes the engine, so follow with
 `POST /admin/rebuild`.
 
-There is **no test suite, no pytest config, and no lint config** in this repo (Ruff is configured only
-through the JetBrains plugin). Do not invent test commands. The engine REPL above is the fastest way to
-exercise retrieval and answer generation without the API or a database; `eval_questions.csv`
-(`question,expected` pairs) is a committed fixture with no runner attached to it yet.
+```bash
+venv/bin/python3 -m pip install -r requirements-dev.txt   # pytest + httpx, once
+venv/bin/python3 -m pytest                                # the whole suite, ~20 s
+```
+
+`tests/` covers **`app/` only** — the scope and permission rules (`test_account_scope.py`,
+`test_accounts_api.py`, `test_tenancy_api.py`), what a token proves (`test_auth.py`), the settings that
+must crash rather than default (`test_config.py`), and the two rate limits (`test_rate_limit.py`). It
+needs neither Postgres nor torch: `tests/conftest.py` puts the required variables in `os.environ`,
+points `DATABASE_URL` at in-memory SQLite, and installs a **stub `job_qa_service`** in `sys.modules`
+before `app` is imported, because `app.routers.search` pulls the engine package in through
+`app.engine_manager` and the real one costs 20 s of torch import per run. Anything that has to exercise
+retrieval belongs in the REPL, not here.
+
+Two consequences worth knowing before editing either side. The SQLite the tests run on only reproduces
+"one admin per organization/unit" because `app/models.py` carries a `sqlite_where` twin of each
+`postgresql_where`; drop it and a second ordinary user in a unit starts failing an invariant Postgres
+does not have. And the world fixture builds accounts directly, so `ck_users_scope` applies — a role
+change in a test has to keep the matching scope column (a `user` row cannot simply be relabelled
+`super_admin` while it still has a `unit_id`).
+
+There is **no lint config** in this repo (Ruff is configured only through the JetBrains plugin). The
+engine still has no automated tests: the REPL above is the fastest way to exercise retrieval and answer
+generation without the API or a database, and `eval_questions.csv` (`question,expected` pairs) is a
+committed fixture with no runner attached to it yet.
 
 ### Docker
 
@@ -111,15 +132,27 @@ This is the most common source of confusion. Settings are read in two unrelated 
    `OPENAI_BASE_URL`, `LLM_MODEL`, `EMBED_MODEL_NAME`, `EMB_CACHE_DIR`) evaluated **at import time**.
    The two files have deliberately similar names and nothing to do with each other.
 
-Because of (2), everything must be present in the **real process environment**. Loading a `.env` through
-pydantic-settings would not reach the engine, and `Settings.Config.env_file = "../.env"` is a
-CWD-relative path that resolves outside the project anyway — treat it as inert. In deployment the compose
-`env_file` injects the variables into the environment, which is what makes it work.
+Because of (2), everything must be present in the **real process environment**, and (1) does not try to
+help: there is **no `env_file`** on `Settings` any more. Loading a `.env` there would satisfy the web
+layer while the engine — which never sees it — went on without an API key, which is worse than not
+loading it at all. (The old `Settings.Config.env_file = "../.env"` was a CWD-relative path resolving
+outside the project, so nothing changed in practice when it went.) In deployment the compose `env_file`
+injects the variables into the environment, which is what makes it work.
 
-`DATABASE_URL` may be set directly, or it is assembled in `app/config.py` from
-`POSTGRES_USER`, `POSTGRES_PASSWORD`, `DATABASE_HOST`, `DATABASE_PORT`, `POSTGRES_DB` — **none of which
-appear in `.env.example`**. The hardcoded `sqlalchemy.url` in `alembic.ini` is always overridden by
-`alembic/env.py`, which pulls `settings.DATABASE_URL`.
+**Secrets are declared with `Field(...)` and no default, so a missing one is a startup crash.**
+`JWT_SECRET` (≥32 chars, the RFC 7518 minimum for HS256), `OPENAI_API_KEY`, `ADMIN_USERNAME` and
+`ADMIN_PASSWORD` (≥8) each stop the process while `app.config` is imported. `OPENAI_API_KEY` is required
+even though the engine degrades gracefully without it — an engine with no key answers every question
+from a fallback template, which looks like the service working. `load_settings()` catches the
+ValidationError and re-raises a short `RuntimeError` naming the offending variables: a raw pydantic error
+renders the *input* it was given, i.e. every collected environment variable, secrets included, into the
+container log.
+
+`DATABASE_URL` may be set directly, or it is assembled from `POSTGRES_USER`, `POSTGRES_PASSWORD`,
+`DATABASE_HOST`, `DATABASE_PORT`, `POSTGRES_DB` (all now in `.env.example`) — with the credentials
+percent-quoted, and a half-filled set raising instead of yielding
+`postgresql+psycopg2://None:None@None:None/None` as it used to. The hardcoded `sqlalchemy.url` in
+`alembic.ini` is always overridden by `alembic/env.py`, which pulls `settings.DATABASE_URL`.
 
 ## Architecture
 
@@ -237,6 +270,36 @@ whether it exists.
 Not implemented, and absent on purpose rather than forgotten: renaming an organization or unit, and a user
 changing their own password (only an admin above them can, via `/accounts/{id}/password`, which
 deliberately does not ask for the old one — it exists for the account that cannot supply it).
+
+### Rate limiting
+
+`app/rate_limit.py` — a sliding window (one deque of timestamps per key) kept **in this process**. No
+Redis and no new dependency, which is the right size for a deployment that is one uvicorn container; N
+workers would mean N budgets, and the limits are loose enough that this is a detail rather than a hole.
+Both limited endpoints answer `429` with a `Retry-After` header and a **Persian** `detail` — the one
+place in `app/` that is not English, because the client prints a `detail` it has no case for verbatim
+(`src/utils/errors.js`) and this one is read by the person standing at the login form.
+
+The two are keyed differently because they are protecting different things:
+
+- **`/auth/login`** — keyed on *source + username*, and only a **wrong** password spends
+  (`check()` before the bcrypt comparison, `hit()` on failure, `reset()` on success). Guessing one
+  account runs out of attempts; someone who signs in correctly all day never does. A username that does
+  not exist is charged too, or the 401 that costs nothing would tell an attacker which names are worth
+  working on. A blocked account's 403 spends nothing — the password was right.
+- **`/search`** — keyed on the *account* (`search_rate_limit` wraps `get_current_user`, so
+  authentication comes first and an anonymous caller gets 401 rather than burning a budget). Per account
+  and not per IP because a whole unit sits behind one office address, and the cost being capped is an
+  encode plus an LLM call.
+
+`TRUST_FORWARDED_FOR` is off by default: `X-Forwarded-For` is client-controlled, and trusting it blindly
+hands out a fresh login budget per forged header. **It has to be turned on in the deployment**, where
+nginx is the only route in — otherwise every client arrives as the proxy's single address and the whole
+world shares one login key. When it is on, `client_ip` reads the **last** entry, not the first: nginx's
+`$proxy_add_x_forwarded_for` appends the address it saw to whatever the caller sent, so the first entry
+is the caller's own claim. Reading it would leave the header forgeable with the switch on, which is the
+whole point of having the switch. `RATE_LIMIT_ENABLED` and the four count/window settings are read from
+`settings` on every call, so they can be flipped in a test without rebuilding the limiters.
 
 ### Moderation flow
 

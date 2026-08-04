@@ -68,10 +68,15 @@ class User(Base):
             name="ck_users_scope"),
         # "One admin per organization" and "one admin per unit" as partial unique
         # indexes: ordinary users share a unit_id freely, only the admin row is capped.
+        # The `sqlite_where` twin is what the test suite runs against; without it the
+        # dialect drops the WHERE clause, the index becomes a plain unique one, and a
+        # second ordinary user in a unit fails on an invariant Postgres does not have.
         Index("uq_users_org_admin", "organization_id", unique=True,
-              postgresql_where=text("role = 'org_admin'")),
+              postgresql_where=text("role = 'org_admin'"),
+              sqlite_where=text("role = 'org_admin'")),
         Index("uq_users_unit_admin", "unit_id", unique=True,
-              postgresql_where=text("role = 'unit_admin'")),
+              postgresql_where=text("role = 'unit_admin'"),
+              sqlite_where=text("role = 'unit_admin'")),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
