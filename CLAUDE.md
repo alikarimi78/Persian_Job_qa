@@ -77,7 +77,8 @@ venv/bin/python3 -m pytest                                # the whole suite, ~20
 
 `tests/` covers **`app/` only** — the scope and permission rules (`test_account_scope.py`,
 `test_accounts_api.py`, `test_tenancy_api.py`), what a token proves (`test_auth.py`), the settings that
-must crash rather than default (`test_config.py`), and the two rate limits (`test_rate_limit.py`). It
+must crash rather than default (`test_config.py`), the two rate limits (`test_rate_limit.py`), and that
+the dashboard's counts stop where its caller's authority does (`test_stats_api.py`). It
 needs neither Postgres nor torch: `tests/conftest.py` puts the required variables in `os.environ`,
 points `DATABASE_URL` at in-memory SQLite, and installs a **stub `job_qa_service`** in `sys.modules`
 before `app` is imported, because `app.routers.search` pulls the engine package in through
@@ -202,11 +203,24 @@ POST /orgs · GET /orgs · GET /orgs/{id} · DELETE /orgs/{id}     super_admin (
 POST /units · GET /units · GET /units/{id} · DELETE /units/{id} super_admin | org_admin
                                                  (a unit_admin only *reads* its own unit)
 GET  /auth/me                 any account: role plus the organization/unit it sits in
+GET  /stats                   super_admin | org_admin | unit_admin   dashboard counts, scoped as /accounts
 ```
 
 An org_admin deliberately **cannot** create ordinary users — it creates the units and their admins, and
 those admins staff their own unit. A super_admin may stand in at any level, but must then name the target
 (`organization_id`/`unit_id`) explicitly, since it has no scope of its own to default to.
+
+`GET /stats` (`app/routers/stats.py`) is the dashboard's single call, and everything it returns is a
+**count**. It reuses `accounts.visible_users` for the roster and repeats the units router's own narrowing,
+so it can never total up something its caller was not entitled to list; an ordinary user has no dashboard
+at all. Two numbers deliberately sit outside that scope because they describe the one shared corpus rather
+than the caller's tenancy — `jobs.corpus_records` (every approved row) and `jobs.engine_records`
+(`manager.record_count`, what the *running* engine was built from, `None` while none is loaded). The gap
+between them is exactly what a rebuild would pick up, and the client draws it as such. `visible_users`
+leaves the caller's own row out — an admin does not manage themselves — so the job scope adds their id
+back, or an admin's own suggestions would be missing from their own queue. The `*_series` fields are one
+count per calendar **day**; which Persian month a day belongs to is decided in the client, because
+فروردین straddles two Gregorian months and a month bucketed here could only be relabelled wrongly there.
 
 Three invariants are enforced by the database, not only by the handlers (`app/models.py:User.__table_args__`,
 mirrored in migration `0003`):
@@ -328,6 +342,17 @@ behind the content, and the login card over the campus photograph. The port brou
 `@theme` naming Vazirmatn), **Redux Toolkit + redux-persist + RTK Query**, **react-hook-form** and
 **react-hot-toast**, under the reference's own path aliases (`@components`, `@store`, `@services`,
 `@hook`, `@utils`, `@constant`, `@assets`, `@routes`, `@pages`, declared in `vite.config.js`).
+**recharts** was added later, for the dashboard only.
+
+Two chrome rules the reference does not have, both applied everywhere rather than per page. The sidebar
+is indigo glass over the `blue-50→indigo-100` content, not the reference's neutral slate, so the panel
+reads as the same material tinted instead of a grey card laid over a blue page. And **every form ends
+with `ui/SubmitBar`** — a rule across the full width, then one tall green button filling it: login, the
+five provisioning forms, the job form and the direct add. Green is reserved for *this* — the button that
+files something — which is why it is a shade deeper than the `success` variant used by «تأیید» in the
+moderation queue. Height and padding travel together as `Button`'s `size` prop rather than as a
+`className`, because Tailwind emits `.h-8` before `.h-10` and a smaller height passed as a class silently
+lost to the base one.
 
 `src/services/*Api.js` is now the whole API surface — one `injectEndpoints` file per router here, over a
 `fetchBaseQuery` that reads the token out of the store and clears the session on a 401. `axios` and the
@@ -360,11 +385,18 @@ Two things in the client are coupled to this repo:
   page including `/` is behind `Protected` since `/search` started requiring a token — but the stash still
   earns its keep across an expired session.
 
-- `src/pages/Manage.jsx` (`/manage`) is the provisioning chain as one page: which sections render depends
-  on the caller's role, mirroring the API's permissions — organizations and super admins for a
-  super_admin, units for an org_admin, users for a unit_admin, and the account table for everyone who has
-  one. It reads `GET /auth/me` for the caller's own scope, and *skips* `/orgs` for a unit_admin rather
-  than catching the 403 it would answer with.
+- `src/pages/manage/` (`/manage/*`) is the provisioning chain, one section per route rather than one page
+  stacking all of them: `dashboard`, `organizations`, `units`, `users`, `accounts`, each a child of
+  `ManageLayout` and each gated on the same roles its endpoints are, so the sidebar never opens onto a
+  section its caller cannot enter. `ManageLayout` asks `GET /auth/me` **once** and hands the answer down
+  through the outlet context, so no page re-derives the caller's organization or unit from the account
+  list; it also *skips* `/orgs` for a unit_admin rather than catching the 403 it would answer with.
+  `Dashboard` reads `/stats` alone and filters nothing for privacy — the server already scoped it, and the
+  role only decides which panels are worth drawing (a unit_admin has one unit, so the two panels about
+  units and organizations are absent instead of being a chart of one bar). `src/components/charts/` is
+  recharts with `theme.js` holding the three fixed series hues, and `src/utils/jalali.js` turns the daily
+  series into Persian months through `Intl` — no date library. Every mutation across the client
+  invalidates the `Stats` tag, so the dashboard follows a provisioning change without refetching by hand.
   `src/components/AccountsTable.jsx` carries the row actions — block/unblock, reset password, move to a
   unit, delete (behind an inline confirmation, since it is the one irreversible action). It repeats the
   backend's rules in `canManage()` and `canMove()` purely so the table does not offer a button that would

@@ -39,6 +39,15 @@ class EngineManager:
     def rebuilding(self) -> bool:
         return self._rebuilding
 
+    @property
+    def record_count(self) -> int | None:
+        """How many records the engine answering searches right now holds — the corpus
+        as of the last successful load, not as of the last approval. Against the
+        approved rows in the database, the difference is what a rebuild would pick up.
+        None while no engine is loaded, which is not the same as zero."""
+        engine = self._engine
+        return None if engine is None else len(engine.df)
+
     def load(self, rebuild_embeddings: bool = False):
         db = SessionLocal()
         try:
