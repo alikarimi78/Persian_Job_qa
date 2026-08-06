@@ -345,14 +345,16 @@ behind the content, and the login card over the campus photograph. The port brou
 **recharts** was added later, for the dashboard only.
 
 One chrome rule the reference does not have, applied everywhere rather than per page: **every form ends
-with `ui/SubmitBar`** — a rule across the full width, then one green button filling it: login, the five
+with `ui/SubmitBar`** — a rule across the full width, then one green button under it: login, the five
 provisioning forms, the job form and the direct add. Green is reserved for *this* — the button that
 files something — which is why it is a shade deeper than the `success` variant used by «تأیید» in the
-moderation queue. The full width is what makes it read as the form's conclusion; the height is ordinary
-(`size="md"`, the same 40px as every other button), because at `xl` the green bar was the loudest thing
-on a page whose actual content is the fields above it. Height and padding travel together as `Button`'s
-`size` prop rather than as a `className`, because Tailwind emits `.h-8` before `.h-10` and a smaller
-height passed as a class silently lost to the base one.
+moderation queue. The *rule* is what spans the form; the button is `size="lg" w-full max-w-md`, so it is
+comfortably large (44px) but caps at 448px and sits at the start of the rule — the right, under
+`dir="rtl"`. It was `w-full` at `size="xl"` to begin with, which on the ten-column job form drew a 1000px
+green bar that read as a banner rather than a button. The cap is a maximum and not a fixed width on
+purpose: the login card is narrower than it, so that form still ends in a button the width of its inputs.
+Height and padding travel together as `Button`'s `size` prop rather than as a `className`, because
+Tailwind emits `.h-8` before `.h-10` and a smaller height passed as a class silently lost to the base one.
 
 The sidebar is the reference's own neutral slate glass (`bg-slate-500/35`), and the navigation states in
 `layout/MenuItem.jsx` are the matching slate family. It was briefly retinted indigo to echo the
