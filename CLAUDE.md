@@ -344,15 +344,21 @@ behind the content, and the login card over the campus photograph. The port brou
 `@hook`, `@utils`, `@constant`, `@assets`, `@routes`, `@pages`, declared in `vite.config.js`).
 **recharts** was added later, for the dashboard only.
 
-Two chrome rules the reference does not have, both applied everywhere rather than per page. The sidebar
-is indigo glass over the `blue-50→indigo-100` content, not the reference's neutral slate, so the panel
-reads as the same material tinted instead of a grey card laid over a blue page. And **every form ends
-with `ui/SubmitBar`** — a rule across the full width, then one tall green button filling it: login, the
-five provisioning forms, the job form and the direct add. Green is reserved for *this* — the button that
+One chrome rule the reference does not have, applied everywhere rather than per page: **every form ends
+with `ui/SubmitBar`** — a rule across the full width, then one green button filling it: login, the five
+provisioning forms, the job form and the direct add. Green is reserved for *this* — the button that
 files something — which is why it is a shade deeper than the `success` variant used by «تأیید» in the
-moderation queue. Height and padding travel together as `Button`'s `size` prop rather than as a
-`className`, because Tailwind emits `.h-8` before `.h-10` and a smaller height passed as a class silently
-lost to the base one.
+moderation queue. The full width is what makes it read as the form's conclusion; the height is ordinary
+(`size="md"`, the same 40px as every other button), because at `xl` the green bar was the loudest thing
+on a page whose actual content is the fields above it. Height and padding travel together as `Button`'s
+`size` prop rather than as a `className`, because Tailwind emits `.h-8` before `.h-10` and a smaller
+height passed as a class silently lost to the base one.
+
+The sidebar is the reference's own neutral slate glass (`bg-slate-500/35`), and the navigation states in
+`layout/MenuItem.jsx` are the matching slate family. It was briefly retinted indigo to echo the
+`blue-50→indigo-100` content behind it; the customer asked for the slate back, so the two files are once
+again exactly what commit `f98125b` shipped. Change them together — the panel and the items in it are one
+surface.
 
 `src/services/*Api.js` is now the whole API surface — one `injectEndpoints` file per router here, over a
 `fetchBaseQuery` that reads the token out of the store and clears the session on a 401. `axios` and the
