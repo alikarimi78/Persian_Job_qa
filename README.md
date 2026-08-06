@@ -72,10 +72,12 @@ venv/bin/python3 -m pytest
 `tests/` covers what is worth being sure of: the scope and permission rules
 (`test_account_scope.py`, `test_accounts_api.py`, `test_tenancy_api.py`), what a token
 does and does not prove (`test_auth.py`), the settings that must crash rather than
-default (`test_config.py`), and the two rate limits (`test_rate_limit.py`). It runs
-against in-memory SQLite with a stubbed engine, so it needs neither Postgres nor torch
-and finishes in seconds. The engine itself has no automated tests; the REPL above is how
-retrieval is exercised.
+default (`test_config.py`), the two rate limits (`test_rate_limit.py`), and what the PDF
+report puts on a page (`test_reports_api.py`). It runs against in-memory SQLite with a
+stubbed engine, so it needs neither Postgres nor torch and finishes in seconds — but the
+report tests do need WeasyPrint's `libpango`, the same system libraries the image
+installs. The engine itself has no automated tests; the REPL above is how retrieval is
+exercised.
 
 ## Architecture
 
@@ -128,6 +130,14 @@ question. Both refuse with `429` and a `Retry-After` header. Behind a proxy, set
 shares one login budget. The header's *last* entry is the one used, since nginx appends
 the address it saw to whatever the caller claimed.
 
+**PDF reports.** `POST /reports/search` turns an answer into an A4 Persian report
+(`app/reports/`): the question, the generated prose, and every column of the matched
+record. The client posts back the result it is already showing rather than naming a
+question to re-run — that saves a second LLM call and guarantees the PDF matches the
+page it came from. Nothing is stored. Rendering is WeasyPrint, so the image needs
+`libpango`/`libcairo` (the Dockerfile installs them); without them the API will not
+start at all.
+
 **The client** is a sibling repo, `../job_qa_frontend` (React + Vite + RTK Query; its
 dev server proxies `/api` here). `src/components/JobForm.jsx` holds the ten dataset
 columns a second time — a column added here has to reach it too.
@@ -139,6 +149,7 @@ columns a second time — a column added here has to reach it too.
 | POST | /auth/login | public (rate limited) | JWT auth |
 | GET | /auth/me | logged-in | role + organization/unit of the caller |
 | POST | /search | logged-in (rate limited) | ask a question |
+| POST | /reports/search | logged-in | print that answer as a PDF report |
 | POST | /jobs/suggestions | logged-in | suggest a full record (pending) |
 | GET | /jobs/suggestions/mine | logged-in | my suggestions + statuses |
 | POST · GET · DELETE | /orgs, /orgs/{id} | super_admin (org_admin reads own) | organizations |

@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Annotated
+
+from pydantic import BaseModel, Field, ConfigDict, StringConstraints
 
 
 class LoginIn(BaseModel):
@@ -133,6 +135,50 @@ class SearchOut(BaseModel):
     # validated record, and the user edits it before it is ever submitted.
     related_jobs: list[str] | None = None
     job_draft: dict[str, str] | None = None
+
+
+# ---------- PDF report ----------
+# The report is rendered from what the client already has on screen rather than from a
+# fresh search: asking again would spend a second LLM call and could print prose the
+# user never saw. That makes the payload untrusted input — it is the caller's own answer
+# coming back, but nothing proves this server wrote it — so every string is bounded.
+# The ceilings are far above any real answer and exist only to stop one account turning
+# a download into an arbitrarily large render.
+ReportText = Annotated[str, StringConstraints(max_length=20_000)]
+ReportLabel = Annotated[str, StringConstraints(max_length=255)]
+
+
+class ReportFieldIn(BaseModel):
+    """One dataset column as `/search` handed it over. `key` is carried so the report
+    can split sentence lists from label lists the way the client's boxes do; the rest
+    is what JobFieldOut returned."""
+    key: ReportLabel
+    label: ReportLabel
+    value: ReportText = ""
+    items: list[ReportText] = Field(default=[], max_length=500)
+    primary: bool = False
+
+
+class ReportJobIn(BaseModel):
+    job_title: ReportLabel
+    fields: list[ReportFieldIn] = Field(default=[], max_length=40)
+
+
+class ReportIn(BaseModel):
+    """A `SearchOut` posted back for printing, plus the question that produced it.
+
+    Deliberately not `SearchOut` itself: that type describes what this server *emits*,
+    where every field is trusted and unbounded. This one describes what it will *accept*
+    from a browser, which is a different thing even though the shapes match. Only the
+    parts the report prints are here — `intent` and `scores` are not on the page.
+    """
+    question: str = Field(min_length=1, max_length=500)
+    mode: ReportLabel
+    answer: ReportText
+    job: ReportLabel | None = None
+    jobs: list[ReportLabel] | None = Field(default=None, max_length=8)
+    details: list[ReportJobIn] = Field(default=[], max_length=4)
+    related_jobs: list[ReportLabel] | None = Field(default=None, max_length=20)
 
 
 class JobIn(BaseModel):

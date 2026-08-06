@@ -77,13 +77,19 @@ venv/bin/python3 -m pytest                                # the whole suite, ~20
 
 `tests/` covers **`app/` only** — the scope and permission rules (`test_account_scope.py`,
 `test_accounts_api.py`, `test_tenancy_api.py`), what a token proves (`test_auth.py`), the settings that
-must crash rather than default (`test_config.py`), the two rate limits (`test_rate_limit.py`), and that
-the dashboard's counts stop where its caller's authority does (`test_stats_api.py`). It
+must crash rather than default (`test_config.py`), the two rate limits (`test_rate_limit.py`), that
+the dashboard's counts stop where its caller's authority does (`test_stats_api.py`), and what the PDF
+report puts on a page (`test_reports_api.py`). It
 needs neither Postgres nor torch: `tests/conftest.py` puts the required variables in `os.environ`,
 points `DATABASE_URL` at in-memory SQLite, and installs a **stub `job_qa_service`** in `sys.modules`
 before `app` is imported, because `app.routers.search` pulls the engine package in through
 `app.engine_manager` and the real one costs 20 s of torch import per run. Anything that has to exercise
 retrieval belongs in the REPL, not here.
+
+The report tests are the one exception to "no heavy dependency": WeasyPrint is imported for real, so
+the suite needs libpango present the same way the container does. They assert mostly on `build_html`
+rather than on a render, because a PDF costs ~0.5 s and by that point the text is already decided —
+only one test renders, and it renders every answer mode, since a template error shows up nowhere else.
 
 Two consequences worth knowing before editing either side. The SQLite the tests run on only reproduces
 "one admin per organization/unit" because `app/models.py` carries a `sqlite_where` twin of each
@@ -204,6 +210,7 @@ POST /units · GET /units · GET /units/{id} · DELETE /units/{id} super_admin |
                                                  (a unit_admin only *reads* its own unit)
 GET  /auth/me                 any account: role plus the organization/unit it sits in
 GET  /stats                   super_admin | org_admin | unit_admin   dashboard counts, scoped as /accounts
+POST /reports/search          any account: an answer it already has, printed as a PDF
 ```
 
 An org_admin deliberately **cannot** create ordinary users — it creates the units and their admins, and
@@ -329,6 +336,44 @@ The first super admin is created from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the s
 migration; every other account comes from the API. Migration `0003` maps the old single `admin` role onto
 `super_admin`, so an existing deployment's admin keeps working.
 
+### PDF reports (`app/reports/`)
+
+`POST /reports/search` prints a search answer as an A4 report: masthead, who issued it and when, the
+question, the generated prose, then **every** column of the matched record — including the boxes the
+user left folded, because a report is read away from the system that produced it.
+
+The client **posts back the `SearchOut` it already has**, and the server does not re-run the search.
+That is the load-bearing decision here: an answer is one LLM call, the model is not deterministic, and
+a report that quietly disagreed with the page it was printed from would be worse than no report.
+Nothing is stored — there is no report history, no table and no migration. The consequence is that the
+payload is **untrusted input**: it is the caller's own answer coming back, but nothing proves this
+server wrote it, so `schemas.ReportIn` is a separate type from `SearchOut` with every string bounded,
+and the template autoescapes. Identity is the one thing never taken from the body — the masthead's
+user/organization/unit come from the token, resolved as `GET /auth/me` does.
+
+- **WeasyPrint, not a PDF-drawing library.** The document is Persian; Pango/HarfBuzz do the shaping and
+  the right-to-left run order, where a canvas API would need every line reshaped and placed by hand.
+  The price is four system libraries in the image — `libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b
+  libcairo2` and friends, installed in the Dockerfile. **They are not optional**: without them the
+  import fails and the whole API stops booting, not just this endpoint.
+- **The font is shipped, not installed.** `assets/Vazirmatn-{Regular,Bold}.ttf` are loaded by
+  `@font-face` against `render._ASSET_BASE`; the container has no fonts at all and fontconfig would
+  fall back to a Latin face that draws Persian as boxes. The logo is the client's, downscaled to 240px.
+- **Emoji are stripped** (`render.printable`, wired in as the Jinja `finalize`, so it covers every
+  `{{ }}` including ones added later). The engine decorates its template answers with 📌 and 🔗
+  (`job_qa_service/render.py`) and Vazirmatn has neither, so Pango substitutes a hex box — which does
+  not even stay in its own block: a 🔗 heading the answer came out beside the *question* two elements
+  above it. What counts as drawable is read from the font's own cmap, with ZWNJ and whitespace kept by
+  hand since a cmap has no entry for them and dropping ZWNJ would rewrite «می‌شود» as «میشود».
+- **No rate limit of its own.** `/search` is the expensive endpoint and is already capped per account;
+  this one neither encodes nor calls the API, and what it can be made to render is bounded by the
+  schema rather than by a budget. One render at a time all the same (`render._render_lock`):
+  `@font-face` registration goes through process-global fontconfig state.
+- The Persian date is `reports/jalali.py`, a dozen lines rather than a dependency — the server-side
+  twin of the client's `src/utils/jalali.js`, which reaches the same calendar through `Intl`. Its clock
+  is fixed at Iran's +03:30 rather than read from the container, which is UTC and would date every
+  evening's report a day early.
+
 ### The client is a sibling repo
 
 `../job_qa_frontend` (React + Vite + react-router, its own git repo; `vite.config.js` proxies `/api` to
@@ -392,6 +437,17 @@ Two things in the client are coupled to this repo:
   router state so the accepted draft survives a redirect through `/login`. That detour is now rare — every
   page including `/` is behind `Protected` since `/search` started requiring a token — but the stash still
   earns its keep across an expired session.
+
+- The **PDF report** is a «گزارش PDF» button on the result card, next to the match score, hidden for
+  `out_of_domain`. It posts the result back (see *PDF reports* above), so `Search.jsx` keeps the question
+  that produced the answer in its own `asked` state — the input box may already hold a retyped one, and
+  the report prints the pair. `jobsApi.searchReport` has to spell out a `responseHandler`, since the body
+  is a PDF; it branches on `response.ok` because a 401 or 422 arrives through the same handler and
+  reading *that* as a blob would hide the `detail` string `utils/errors.js` prints. The file is named
+  from the job title by `src/utils/download.js` rather than from `Content-Disposition` — RTK Query hands
+  back only the body, and three reports downloaded in a row are told apart by job, not by a shared date.
+  The backend still sets the header (`job-report-<jalali date>.pdf`) for anyone calling the endpoint
+  directly.
 
 - `src/pages/manage/` (`/manage/*`) is the provisioning chain, one section per route rather than one page
   stacking all of them: `dashboard`, `organizations`, `units`, `users`, `accounts`, each a child of

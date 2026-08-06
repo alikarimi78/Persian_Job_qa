@@ -7,6 +7,12 @@ PyJWT>=2.8
 bcrypt==5.0.0
 alembic==1.18.5
 
+# PDF reports (app/reports). WeasyPrint needs libpango/libcairo from the OS — the
+# Dockerfile installs them; jinja2 is only ever a transitive dependency of torch here,
+# so the template engine is named explicitly rather than relied on to be there.
+weasyprint>=62
+jinja2>=3.1
+
 # RAG engine
 numpy==1.24.3
 pandas>=2.0

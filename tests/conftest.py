@@ -49,6 +49,7 @@ from app.models import Organization, Role, Unit, User
 from app.routers import accounts as accounts_router
 from app.routers import auth as auth_router
 from app.routers import orgs as orgs_router
+from app.routers import reports as reports_router
 from app.routers import stats as stats_router
 from app.routers import units as units_router
 
@@ -139,6 +140,7 @@ def app(db) -> FastAPI:
     api.include_router(orgs_router.router)
     api.include_router(units_router.router)
     api.include_router(stats_router.router)
+    api.include_router(reports_router.router)
     api.dependency_overrides[get_db] = lambda: db
     return api
 

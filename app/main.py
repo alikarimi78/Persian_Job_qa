@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .engine_manager import manager
-from .routers import accounts, admin, auth, jobs, orgs, search, stats, units
+from .routers import accounts, admin, auth, jobs, orgs, reports, search, stats, units
 
 log = logging.getLogger("main")
 
@@ -23,6 +23,7 @@ app = FastAPI(title="Persian Occupation Q&A API", version="1.0.0", lifespan=life
 
 app.include_router(auth.router)
 app.include_router(search.router)
+app.include_router(reports.router)
 app.include_router(jobs.router)
 app.include_router(admin.router)
 app.include_router(orgs.router)

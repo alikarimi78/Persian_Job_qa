@@ -22,7 +22,16 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir torch==2.7.1 --index-url ${TORCH_INDEX}
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN apt-get update && apt-get install -y vim iputils-ping curl
+# libpango/libcairo are WeasyPrint's rendering back end (app/reports): it is Pango that
+# shapes Persian and orders the right-to-left runs, which is the whole reason the PDF is
+# built from HTML here rather than drawn. Without them the import itself fails, so the
+# API would not start at all — this is not an optional extra. The report's font is
+# shipped in app/reports/assets and loaded by path, so no fonts package is needed.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libfribidi0 \
+        libcairo2 libgdk-pixbuf-2.0-0 \
+        vim iputils-ping curl \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY alembic.ini ./
 COPY job_qa_service ./job_qa_service
