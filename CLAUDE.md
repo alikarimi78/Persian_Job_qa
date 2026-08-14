@@ -111,11 +111,43 @@ committed fixture with no runner attached to it yet.
 setup it expects: a `postgres:16` service named `db`, `env_file: .env`, and named volumes for
 `/root/.cache/huggingface` and `/srv/emb_cache` (both caches are expensive to lose).
 
+#### Why the base image is pinned by digest (2026-08-14)
+
+`FROM python:3.11-slim@sha256:a630a63c…`, not `FROM python:3.11-slim`. **The tag moves**: the official
+Python images are rebuilt whenever Debian ships a security update, and this machine's build cache showed
+three different digests of that one tag inside a month — `90edbeb8` (07-15), `3c35dbe0` (08-05),
+`a630a63c` (08-14). A changed base layer invalidates every layer beneath it, so a rebuild days later
+re-downloaded the 4.3 GB CUDA torch wheel with nothing in the repo having changed. That was the whole of
+the "why does it download torch again" mystery; the pin is the fix, and everything else below is defence
+in depth. Bump it deliberately — `docker pull python:3.11-slim` then
+`docker image inspect python:3.11-slim --format '{{index .RepoDigests 0}}'` — never by accident.
+
+Two smaller causes were fixed with it:
+
+- **`COPY requirements.txt` used to sit above the torch install**, so every edit to that file invalidated
+  the torch layer too — adding `jinja2` for the PDF reports cost a 4.3 GB re-download. The layers are now
+  ordered by how often they change: base → apt → torch → `requirements.txt` → application code.
+- **`--no-cache-dir` is gone**, replaced by `RUN --mount=type=cache,target=/root/.cache/pip`. A cache
+  mount is not a layer, so the image does not grow — that was all `--no-cache-dir` was ever protecting —
+  and a *deliberate* invalidation (a bumped base, a different `TORCH_INDEX`) now reuses the downloaded
+  wheels instead of fetching them again. No `# syntax=` directive is needed for it; BuildKit's built-in
+  frontend supports cache mounts, and pinning a frontend image would be one more thing to pull per build.
+
+`.dockerignore` is new and is an **allow-list** (`*`, then the paths the Dockerfile copies). The context
+was 6.1 GB — `venv/` alone is 6.0 GB — sent to the daemon on every build for the ~1 MB the image actually
+takes. A deny-list would need editing every time the repo grew a directory; the cost of the allow-list is
+that a new `COPY` needs a matching `!line`, and forgetting one fails the build loudly.
+
+The build cache is still not immortal: BuildKit's default GC prunes cache mounts after 48 h and the rest
+under disk pressure, and `docker builder prune` wipes all of it. What the pin guarantees is that nothing
+is invalidated *by itself* between builds.
+
 ### Torch: pinned to a CUDA build, on purpose
 
 The Dockerfile installs `torch==2.7.1` from a **PyTorch index before** `requirements.txt`, so that wheel
 already satisfies `torch>=2.6,<2.8` and pip never resolves torch off PyPI on its own. Keep the ordering
-when touching dependencies — the whole point of the line is that it wins the resolution.
+when touching dependencies — the whole point of the line is that it wins the resolution, and the second
+point is that torch is the slowest-changing layer and must sit above anything that churns.
 
 The index is `ARG TORCH_INDEX`, defaulting to `.../whl/cu126` (the same build the checked-out `venv/`
 has). The CPU-only image is one flag away:
@@ -703,8 +735,9 @@ has `nvidia-container-toolkit`. The dev machine does **not** have the toolkit
 `sudo apt install nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`.
 None of that blocks the image: without a visible GPU the engine runs on CPU by itself.
 
-A third possible reading of "slow build" — `docker build` itself — is untouched and would be a separate
-problem (layer ordering and pip caching), made worse by CUDA's 4.3 GB of wheels.
+A third possible reading of "slow build" — `docker build` itself — was a separate problem and was fixed
+on 2026-08-14: see *Why the base image is pinned by digest*. Short version: the base tag moved under the
+build, which invalidated the 4.3 GB torch layer for free.
 
 ## `data_extactor/` — offline data pipeline
 
