@@ -8,7 +8,7 @@ from ..accounts import assert_manages_organization, assert_manages_unit, get_org
 from ..auth import require_roles
 from ..database import get_db
 from ..models import Role, Unit, User
-from ..schemas import UnitIn, UnitOut
+from ..schemas import RenameIn, UnitIn, UnitOut
 
 router = APIRouter(prefix="/units", tags=["units"])
 
@@ -66,6 +66,30 @@ def get_one(unit_id: int,
             db: Session = Depends(get_db)):
     unit = get_unit(db, unit_id)
     assert_manages_unit(actor, unit)
+    return unit
+
+
+@router.patch("/{unit_id}", response_model=UnitOut)
+def rename_unit(unit_id: int, body: RenameIn, actor: User = Depends(_manager),
+                db: Session = Depends(get_db)):
+    """The same two roles that decide a unit exists decide what it is called. A
+    unit_admin is left out for the reason they are left out of creation and deletion:
+    they staff the unit, they do not define it.
+
+    The unit does not change organization — `organization_id` is not in `RenameIn` at
+    all — so the uniqueness question is the one creation asks, inside this organization.
+    """
+    unit = get_unit(db, unit_id)
+    assert_manages_unit(actor, unit)
+    clash = db.query(Unit).filter(Unit.organization_id == unit.organization_id,
+                                  Unit.name == body.name,
+                                  Unit.id != unit_id).first()
+    if clash:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "This organization already has a unit with that name")
+    unit.name = body.name
+    db.commit()
+    db.refresh(unit)
     return unit
 
 

@@ -7,7 +7,7 @@ from ..accounts import assert_manages_organization, get_organization
 from ..auth import require_roles, require_super_admin
 from ..database import get_db
 from ..models import Organization, Role, Unit, User
-from ..schemas import OrganizationIn, OrganizationOut
+from ..schemas import OrganizationIn, OrganizationOut, RenameIn
 
 router = APIRouter(prefix="/orgs", tags=["organizations"])
 
@@ -39,6 +39,25 @@ def get_one(organization_id: int,
             db: Session = Depends(get_db)):
     org = get_organization(db, organization_id)
     assert_manages_organization(actor, organization_id)
+    return org
+
+
+@router.patch("/{organization_id}", response_model=OrganizationOut,
+              dependencies=[Depends(require_super_admin)])
+def rename_organization(organization_id: int, body: RenameIn, db: Session = Depends(get_db)):
+    """Renaming is the same authority as creating — super_admin only. An org_admin reads
+    its organization and staffs it, but does not get to relabel the tenancy it sits in.
+
+    Nothing else moves with the name: units keep pointing at the same id, and so do the
+    accounts. The only way this fails is the name already being someone else's."""
+    org = get_organization(db, organization_id)
+    clash = db.query(Organization).filter(Organization.name == body.name,
+                                          Organization.id != organization_id).first()
+    if clash:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Organization name already taken")
+    org.name = body.name
+    db.commit()
+    db.refresh(org)
     return org
 
 

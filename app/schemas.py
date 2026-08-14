@@ -39,6 +39,13 @@ class UnitOut(BaseModel):
     organization_id: int
 
 
+class RenameIn(BaseModel):
+    """The whole of what `PATCH /orgs/{id}` and `PATCH /units/{id}` accept. A container
+    is its name plus what it holds, and everything it holds moves through its own
+    endpoint — a unit never changes organization here, and neither of them changes id."""
+    name: str = Field(min_length=2, max_length=128)
+
+
 # ---------- accounts ----------
 class AccountIn(BaseModel):
     """Credentials for an account someone else is creating. There is no self-service

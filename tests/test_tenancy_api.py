@@ -99,3 +99,63 @@ def test_units_of_one_organization_may_share_a_name_with_anothers(world, as_user
         json={"name": "unit-a1", "organization_id": world.org_b.id}).status_code == 201
     assert as_user(world.admin_a)("POST", "/units",
                                   json={"name": "unit-a1"}).status_code == 409
+
+
+# ---------- renaming ----------
+
+@pytest.mark.parametrize("caller, expected", [("root", 200), ("admin_a", 403),
+                                              ("admin_a1", 403), ("user_a1", 403)])
+def test_only_a_super_admin_renames_an_organization(world, as_user, caller, expected):
+    """Renaming carries the authority creating does — an org_admin reads its
+    organization and staffs it, but does not relabel the tenancy it sits in."""
+    response = as_user(getattr(world, caller))(
+        "PATCH", f"/orgs/{world.org_a.id}", json={"name": "org-a-renamed"})
+    assert response.status_code == expected
+
+
+def test_renaming_an_organization_moves_nothing_else(world, db, as_user):
+    response = as_user(world.root)("PATCH", f"/orgs/{world.org_a.id}",
+                                   json={"name": "ستاد مرکزی"})
+    assert response.status_code == 200
+    assert response.json() == {"id": world.org_a.id, "name": "ستاد مرکزی"}
+    assert db.query(Unit).filter(Unit.organization_id == world.org_a.id).count() == 2
+
+
+def test_an_organization_cannot_take_a_name_already_in_use(world, as_user):
+    root = as_user(world.root)
+    assert root("PATCH", f"/orgs/{world.org_a.id}",
+                json={"name": "org-b"}).status_code == 409
+    # its own current name is not a clash with itself
+    assert root("PATCH", f"/orgs/{world.org_a.id}",
+                json={"name": "org-a"}).status_code == 200
+
+
+@pytest.mark.parametrize("caller, expected", [("root", 200), ("admin_a", 200),
+                                              ("admin_a1", 403), ("user_a1", 403)])
+def test_units_are_renamed_by_whoever_decides_they_exist(world, as_user, caller, expected):
+    """The same two roles as create and delete. A unit_admin staffs the unit; they do
+    not define it."""
+    response = as_user(getattr(world, caller))(
+        "PATCH", f"/units/{world.unit_a1.id}", json={"name": "واحد آموزش"})
+    assert response.status_code == expected
+
+
+def test_an_org_admin_does_not_rename_another_organizations_unit(world, as_user):
+    assert as_user(world.admin_a)(
+        "PATCH", f"/units/{world.unit_b1.id}", json={"name": "unit-x"}).status_code == 403
+
+
+def test_a_renamed_unit_stays_in_its_organization(world, as_user):
+    response = as_user(world.admin_a)("PATCH", f"/units/{world.unit_a1.id}",
+                                      json={"name": "unit-a1-renamed"})
+    assert response.status_code == 200
+    assert response.json()["organization_id"] == world.org_a.id
+
+
+def test_a_unit_cannot_take_a_sibling_name_but_may_take_a_stranger_s(world, as_user):
+    """Uniqueness is the question creation asks — inside this organization only."""
+    admin_a = as_user(world.admin_a)
+    assert admin_a("PATCH", f"/units/{world.unit_a1.id}",
+                   json={"name": "unit-a2"}).status_code == 409
+    assert admin_a("PATCH", f"/units/{world.unit_a1.id}",
+                   json={"name": "unit-b1"}).status_code == 200

@@ -205,8 +205,10 @@ GET  /accounts                super_admin | org_admin | unit_admin   scoped, ?ro
 POST   /accounts/{id}/block · /unblock · /password     any admin, over accounts below them
 POST   /accounts/{id}/unit    super_admin | org_admin  move an account to another unit
 DELETE /accounts/{id}         any admin, over accounts below them
-POST /orgs · GET /orgs · GET /orgs/{id} · DELETE /orgs/{id}     super_admin (org_admin reads its own)
-POST /units · GET /units · GET /units/{id} · DELETE /units/{id} super_admin | org_admin
+POST /orgs · GET /orgs · GET /orgs/{id} · PATCH /orgs/{id} · DELETE /orgs/{id}
+                              super_admin (org_admin reads its own)
+POST /units · GET /units · GET /units/{id} · PATCH /units/{id} · DELETE /units/{id}
+                              super_admin | org_admin
                                                  (a unit_admin only *reads* its own unit)
 GET  /auth/me                 any account: role plus the organization/unit it sits in
 GET  /stats                   super_admin | org_admin | unit_admin   dashboard counts, scoped as /accounts
@@ -288,9 +290,17 @@ the existing foreign keys are never violated, so deletion needed no migration of
 is closed to a unit_admin for the same reason creating one is: they staff the unit, they do not decide
 whether it exists.
 
-Not implemented, and absent on purpose rather than forgotten: renaming an organization or unit, and a user
-changing their own password (only an admin above them can, via `/accounts/{id}/password`, which
-deliberately does not ask for the old one — it exists for the account that cannot supply it).
+**Renaming** (`PATCH /orgs/{id}`, `PATCH /units/{id}`) takes the same authority as creating the container:
+an organization is a super_admin's, a unit is its organization's admin's as well. Both accept `RenameIn`
+and nothing else — a name is the only thing a container has that is not a pointer to what it holds, so a
+unit never changes organization here and neither of them changes id. Uniqueness is re-asked the way
+creation asks it (globally for an organization, inside the organization for a unit) but excluding the row
+itself, or renaming something to what it is already called would 409.
+
+Not implemented, and absent on purpose rather than forgotten: renaming an *account* (login is by username,
+so the name is the credential), and a user changing their own password (only an admin above them can, via
+`/accounts/{id}/password`, which deliberately does not ask for the old one — it exists for the account that
+cannot supply it).
 
 ### Rate limiting
 
@@ -390,8 +400,9 @@ behind the content, and the login card over the campus photograph. The port brou
 **recharts** was added later, for the dashboard only.
 
 One chrome rule the reference does not have, applied everywhere rather than per page: **every form ends
-with `ui/SubmitBar`** — a rule across the full width, then one green button under it: login, the five
-provisioning forms, the job form and the direct add. Green is reserved for *this* — the button that
+with `ui/SubmitBar`** — a rule across the full width, then one green button under it: login, the job form
+and the direct add. The provisioning forms now live in dialogs, where `ui/Modal`'s footer *is* that bar
+(see *The management sections* below) rather than an exception to it. Green is reserved for *this* — the button that
 files something — which is why it is a shade deeper than the `success` variant used by «تأیید» in the
 moderation queue. The *rule* is what spans the form; the button is `size="lg" w-full max-w-md`, so it is
 comfortably large (44px) but caps at 448px and sits at the start of the rule — the right, under
@@ -450,23 +461,53 @@ Two things in the client are coupled to this repo:
   directly.
 
 - `src/pages/manage/` (`/manage/*`) is the provisioning chain, one section per route rather than one page
-  stacking all of them: `dashboard`, `organizations`, `units`, `users`, `accounts`, each a child of
-  `ManageLayout` and each gated on the same roles its endpoints are, so the sidebar never opens onto a
-  section its caller cannot enter. `ManageLayout` asks `GET /auth/me` **once** and hands the answer down
-  through the outlet context, so no page re-derives the caller's organization or unit from the account
-  list; it also *skips* `/orgs` for a unit_admin rather than catching the 403 it would answer with.
+  stacking all of them: `dashboard`, `organizations`, `units`, `accounts`, each a child of `ManageLayout`
+  and each gated on the same roles its endpoints are, so the sidebar never opens onto a section its caller
+  cannot enter. They are **four top-level sidebar items**, not one «مدیریت» parent that expands — the
+  customer asked for that, and `constant/menuItems.jsx` is the only file that decides it (`MenuItem.jsx`
+  still knows how to draw a parent; nothing declares one). `ManageLayout` asks `GET /auth/me` **once** and
+  hands the answer down through the outlet context, so no page re-derives the caller's organization or
+  unit from the account list; it also *skips* `/orgs` for a unit_admin rather than catching the 403 it
+  would answer with, and it draws nothing of its own — each page opens with its own `ui/PageToolbar`.
   `Dashboard` reads `/stats` alone and filters nothing for privacy — the server already scoped it, and the
   role only decides which panels are worth drawing (a unit_admin has one unit, so the two panels about
   units and organizations are absent instead of being a chart of one bar). `src/components/charts/` is
   recharts with `theme.js` holding the three fixed series hues, and `src/utils/jalali.js` turns the daily
   series into Persian months through `Intl` — no date library. Every mutation across the client
   invalidates the `Stats` tag, so the dashboard follows a provisioning change without refetching by hand.
-  `src/components/AccountsTable.jsx` carries the row actions — block/unblock, reset password, move to a
-  unit, delete (behind an inline confirmation, since it is the one irreversible action). It repeats the
-  backend's rules in `canManage()` and `canMove()` purely so the table does not offer a button that would
-  come back 403; the server is still the one enforcing them, and the pairs must be changed together.
-  Organizations and units get the same inline confirmation, and the page does not try to predict whether
-  one is empty — it asks, and shows the 409 the server answers with.
+
+- **The management sections are built on the customer's `admin_panel.mp4`** (in the client repo's
+  `style_files/`, alongside the eight reference `.tsx`). Its pattern, and now theirs: a `ui/PageToolbar`
+  whose one green «افزودن … جدید» button opens a dialog, a `ui/DataTable` under it, and a «عملیات‌ها»
+  column of round `ui/IconButton`s that each open a dialog of their own. **Nothing is created or edited on
+  the page any more** — `components/manage/Forms.jsx` is five dialogs (`NameDialog`, `CredentialsDialog`,
+  `PasswordDialog`, `ConfirmDialog`, `DetailsDialog`) rather than the cards it used to be.
+  - `ui/Modal` renders through a **portal onto `<body>`**: `MainLayout` scrolls the content area rather
+    than the page, so a dialog declared inside a page would be clipped by that box. Its z-index has to
+    clear the sidebar's `z-[9999999]` and stay under the toaster's `99999999`, so a failed submit reports
+    itself over the dialog it failed in.
+  - The **modal footer is the SubmitBar**, not an exception to it: a rule across the width with one green
+    button at the start of it, moved to the bottom of the panel so it stays put while a long body scrolls.
+    The button reaches its `<form>` through the HTML `form=` attribute. The reference puts its footer
+    buttons at the *end* of the row; here they are at the start, because that is where the other eight
+    forms in this app put theirs.
+  - `RowActions` is `justify-end`, which under `dir="rtl"` anchors the group at the **left**, so delete is
+    written last everywhere and keeps its position whatever else a row does or does not offer. Reading
+    right to left the buttons come out edit, view, delete — the reference's own order.
+  - `src/components/AccountsTable.jsx` carries the row actions — block/unblock, reset password, move to a
+    unit, delete — each now a dialog rather than an inline panel. «ویرایش» on an account is the *unit* and
+    nothing else: a role decides which scope column the row carries, and a username is the credential you
+    log in with, so neither has an endpoint. It repeats the backend's rules in `canManage()` and
+    `canMove()` purely so the table does not offer a button that would come back 403; the server is still
+    the one enforcing them, and the pairs must be changed together.
+  - Organizations and units get a «تعریف ادمین» button as a **fourth row action**, shown only while the
+    seat is empty. The page still does not try to predict whether a container is empty before deleting —
+    it asks, and shows the 409 the server answers with.
+  - There is no `/manage/users` page. Account creation of every kind is one dialog on `/manage/accounts`
+    with a role picker, driven by the `CREATABLE` / `SCOPE_OF` tables at the top of `Accounts.jsx` — which
+    are the provisioning chain of `app/routers/accounts.py` read as data. Organizations that already have
+    an admin, and units that already have one, are left out of its picker rather than offered and refused.
+    `/manage/users` redirects to `/manage/accounts` for anyone holding the old bookmark.
 
 Self-registration is gone from the client too (the page was deleted, and every route but `/login` sits
 inside `MainLayout` behind `Protected` now that `/search` needs a token).
