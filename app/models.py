@@ -1,8 +1,8 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import (Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Index, String,
-                        Text, UniqueConstraint, func, text)
+from sqlalchemy import (Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Index,
+                        LargeBinary, String, Text, UniqueConstraint, func, text)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -31,13 +31,50 @@ class JobStatus(str, enum.Enum):
 
 
 class Organization(Base):
+    """The top of the tenancy, and the only container with a profile of its own.
+
+    Everything past `name` is contact detail the customer's admin_panel.mp4 asks for —
+    a code, an address, a phone, an email, a logo. All of it is nullable: the
+    organizations that existed before this had none of it, and an admin editing one of
+    those must not be forced to invent an email before they can fix a typo in the name.
+    The *form* is what requires them (the reference marks all but the code with a red
+    asterisk); the column is only asked to hold what it is given.
+    """
     __tablename__ = "organizations"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    # «شناسه سازمان» — the customer's own identifier for the organization, not ours.
+    # Deliberately not unique: it is theirs to collide with, and `name` already carries
+    # the uniqueness the system needs.
+    code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    address: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    # The logo lives in the row rather than on disk: the container has no writable
+    # volume of its own (only the two caches), and a file on the filesystem would be one
+    # more thing to back up in step with the database. It is deliberately *not* in
+    # `OrganizationOut` — see `GET /orgs/{id}/logo`, which is what keeps a list of
+    # organizations from carrying a megabyte of images no caller asked for.
+    #
+    # `deferred` is load-bearing rather than tidy: SQLAlchemy selects every column by
+    # default, so without it `GET /orgs` would pull each organization's image out of
+    # Postgres on every dashboard visit only to leave it out of the response.
+    logo: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    logo_mime: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     units: Mapped[list["Unit"]] = relationship(back_populates="organization")
+
+    @property
+    def has_logo(self) -> bool:
+        """What `OrganizationOut` reports in place of the image.
+
+        Read off `logo_mime` and not off `logo`, precisely so that asking the question
+        does not undo the `deferred` above and fetch the blob. The two columns are
+        written and cleared together (`routers/orgs.py:apply_logo`), which is what makes
+        the cheap one a truthful answer about the expensive one."""
+        return self.logo_mime is not None
 
 
 class Unit(Base):

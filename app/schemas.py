@@ -1,6 +1,7 @@
+import re
 from typing import Annotated
 
-from pydantic import BaseModel, Field, ConfigDict, StringConstraints
+from pydantic import BaseModel, Field, ConfigDict, StringConstraints, field_validator
 
 
 class LoginIn(BaseModel):
@@ -15,14 +16,110 @@ class TokenOut(BaseModel):
 
 
 # ---------- tenancy: organizations and units ----------
-class OrganizationIn(BaseModel):
+# A data URI is ~4/3 of the bytes it carries, so this caps the encoded string a little
+# above `MAX_LOGO_BYTES` (routers/orgs.py) — a cheap first guard, so an oversized upload
+# is refused by the parser instead of being base64-decoded first.
+_MAX_LOGO_URI = 800_000
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
+# Persian and Arabic-Indic digits both reach us from an Iranian keyboard; the column
+# stores ASCII so that two records typed on different layouts are the same phone number.
+# The client renders them back to Persian digits with `faNumber`, as it does everywhere.
+_DIGIT_MAP = {ord(c): str(i % 10) for i, c in enumerate("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩")}
+
+
+def _blank_to_none(value: str | None) -> str | None:
+    """An empty box in the form means «clear this», not «store an empty string»."""
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+class OrganizationProfile(BaseModel):
+    """The contact detail an organization carries, from the customer's admin_panel.mp4.
+
+    Every one of these is optional *here* even though the reference form marks all but
+    the code as required. Two reasons, and they are the same reason twice: the
+    organizations that predate this migration have none of it, and `PATCH` is how they
+    get fixed — an admin correcting a name must not be told to invent an email first.
+    Requiring them is the form's job (`components/manage/Forms.jsx`), where the person
+    filling it in can see which box is empty.
+    """
+    code: str | None = Field(default=None, max_length=64)
+    address: str | None = Field(default=None, max_length=512)
+    phone: str | None = Field(default=None, max_length=32)
+    email: str | None = Field(default=None, max_length=254)
+    # The image itself, as a `data:image/png;base64,…` URI. It travels as a string
+    # because multipart would mean adding python-multipart for this one endpoint, and
+    # because the client already holds the file as a data URI (FileReader). Decoded and
+    # checked in `routers/orgs.py:decode_logo`; `None` leaves an existing logo alone,
+    # while `""` removes it.
+    logo: str | None = Field(default=None, max_length=_MAX_LOGO_URI)
+
+    @field_validator("code", "address")
+    @classmethod
+    def _clean(cls, value):
+        return _blank_to_none(value)
+
+    @field_validator("phone")
+    @classmethod
+    def _clean_phone(cls, value):
+        value = _blank_to_none(value)
+        if value is None:
+            return None
+        value = value.translate(_DIGIT_MAP)
+        if not re.fullmatch(r"[0-9+\-() ]{7,32}", value) or sum(c.isdigit() for c in value) < 7:
+            raise ValueError("Phone must be 7-20 digits, optionally with + - ( ) or spaces")
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def _clean_email(cls, value):
+        value = _blank_to_none(value)
+        if value is None:
+            return None
+        value = value.lower()
+        if not _EMAIL_RE.match(value):
+            raise ValueError("Not a valid email address")
+        return value
+
+
+class OrganizationIn(OrganizationProfile):
     name: str = Field(min_length=2, max_length=128)
+
+
+class OrganizationUpdateIn(OrganizationProfile):
+    """`PATCH /orgs/{id}`. Every field is optional and only the ones actually sent are
+    applied (`exclude_unset`), so a client may send the whole form or one box of it.
+    Sending a field as `""` or `null` is how a value is *cleared* — which is why absent
+    and empty have to stay distinguishable, and why this is not just OrganizationIn with
+    a default name."""
+    name: str | None = Field(default=None, min_length=2, max_length=128)
 
 
 class OrganizationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
+    code: str | None = None
+    address: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    # Not the logo itself. `GET /orgs` is read by three pages on every visit, and a list
+    # carrying one image per row would cost megabytes for a column most of them only
+    # need to know is *there* — the thumbnail asks for it separately.
+    has_logo: bool = False
+
+
+class OrganizationLogoOut(BaseModel):
+    """`GET /orgs/{id}/logo` — the image as a data URI, or null if there is none.
+
+    A data URI and not the raw bytes, because the endpoint needs the Authorization
+    header like every other one and an `<img src>` cannot send it. This way the client
+    fetches it through the same RTK Query base as everything else and drops the string
+    straight into `src`."""
+    logo: str | None = None
 
 
 class UnitIn(BaseModel):
@@ -40,9 +137,13 @@ class UnitOut(BaseModel):
 
 
 class RenameIn(BaseModel):
-    """The whole of what `PATCH /orgs/{id}` and `PATCH /units/{id}` accept. A container
-    is its name plus what it holds, and everything it holds moves through its own
-    endpoint — a unit never changes organization here, and neither of them changes id."""
+    """The whole of what `PATCH /units/{id}` accepts. A unit is its name plus what it
+    holds, and everything it holds moves through its own endpoint — it never changes
+    organization here and never changes id.
+
+    Organizations outgrew this when they gained a profile (`OrganizationUpdateIn`); a
+    unit has not, and giving it the same partial-update shape would only add a way to
+    send nothing at all."""
     name: str = Field(min_length=2, max_length=128)
 
 

@@ -239,6 +239,7 @@ POST   /accounts/{id}/unit    super_admin | org_admin  move an account to anothe
 DELETE /accounts/{id}         any admin, over accounts below them
 POST /orgs · GET /orgs · GET /orgs/{id} · PATCH /orgs/{id} · DELETE /orgs/{id}
                               super_admin (org_admin reads its own)
+GET  /orgs/{id}/logo          same readers: the image, kept out of the list
 POST /units · GET /units · GET /units/{id} · PATCH /units/{id} · DELETE /units/{id}
                               super_admin | org_admin
                                                  (a unit_admin only *reads* its own unit)
@@ -322,12 +323,33 @@ the existing foreign keys are never violated, so deletion needed no migration of
 is closed to a unit_admin for the same reason creating one is: they staff the unit, they do not decide
 whether it exists.
 
-**Renaming** (`PATCH /orgs/{id}`, `PATCH /units/{id}`) takes the same authority as creating the container:
-an organization is a super_admin's, a unit is its organization's admin's as well. Both accept `RenameIn`
-and nothing else — a name is the only thing a container has that is not a pointer to what it holds, so a
-unit never changes organization here and neither of them changes id. Uniqueness is re-asked the way
-creation asks it (globally for an organization, inside the organization for a unit) but excluding the row
-itself, or renaming something to what it is already called would 409.
+**Editing** (`PATCH /orgs/{id}`, `PATCH /units/{id}`) takes the same authority as creating the container:
+an organization is a super_admin's, a unit is its organization's admin's as well. A unit accepts `RenameIn`
+and nothing else — a name is the only thing it has that is not a pointer to what it holds, so it never
+changes organization here and never changes id. Uniqueness is re-asked the way creation asks it (globally
+for an organization, inside the organization for a unit) but excluding the row itself, or renaming
+something to what it is already called would 409.
+
+An **organization** also carries a profile — `code`, `address`, `phone`, `email`, `logo` — added in
+migration `0006` from the customer's `admin_panel.mp4` («شناسه سازمان», «آدرس سازمان», «شماره تماس»،
+«پست الکترونیکی», «انتخاب لوگو»). Three things about it are deliberate and easy to undo by accident:
+
+- **Every column is nullable, though the reference form marks four of them required.** The requirement is
+  the form's (`components/manage/Forms.jsx:OrganizationDialog`), not the column's: the organizations that
+  predate the migration have none of this, and `PATCH` is how they get filled in — an admin fixing a typo
+  in a name cannot first be made to invent an email. A NOT NULL would have needed a backfill of invented
+  values, which is worse data than an honest NULL.
+- **`OrganizationUpdateIn` applies only the fields actually sent** (`exclude_unset`), so one dialog backs
+  both the whole form and a one-box correction, and a field sent as `""` is *cleared*. Absent and empty
+  therefore mean different things — which is what lets the client leave `logo` out of a PATCH that never
+  opened the picker instead of wiping the image the row already has.
+- **The logo is bytes in the row, `deferred`, and reached through `GET /orgs/{id}/logo`.** It is not in
+  `OrganizationOut` — a list read by three pages would otherwise carry an image per row — so the row
+  answers `has_logo` (read off the cheap `logo_mime`, which is why `apply_logo` is the only place either
+  column is written). The endpoint returns a **data URI rather than raw bytes**, because every endpoint
+  here needs the Authorization header and an `<img src>` cannot send one. `decode_logo` checks the
+  declared mime against the file's own magic bytes and refuses SVG outright: the type decides how the
+  bytes are served back to a browser, so believing it would make this field stored XSS.
 
 Not implemented, and absent on purpose rather than forgotten: renaming an *account* (login is by username,
 so the name is the credential), and a user changing their own password (only an admin above them can, via
@@ -512,8 +534,14 @@ Two things in the client are coupled to this repo:
   `style_files/`, alongside the eight reference `.tsx`). Its pattern, and now theirs: a `ui/PageToolbar`
   whose one green «افزودن … جدید» button opens a dialog, a `ui/DataTable` under it, and a «عملیات‌ها»
   column of round `ui/IconButton`s that each open a dialog of their own. **Nothing is created or edited on
-  the page any more** — `components/manage/Forms.jsx` is five dialogs (`NameDialog`, `CredentialsDialog`,
-  `PasswordDialog`, `ConfirmDialog`, `DetailsDialog`) rather than the cards it used to be.
+  the page any more** — `components/manage/Forms.jsx` is six dialogs (`NameDialog`, `OrganizationDialog`,
+  `CredentialsDialog`, `PasswordDialog`, `ConfirmDialog`, `DetailsDialog`) rather than the cards it used
+  to be. `NameDialog` is the units' now: an organization outgrew it when it gained a profile, and
+  `OrganizationDialog` lays the six fields out two per row exactly as the reference does — a
+  `grid-cols-2`, not an `auto-fit` track, which at this width silently becomes three columns and re-pairs
+  every field with the wrong neighbour. Its logo picker is **three states, not two**: untouched leaves
+  `logo` out of the PATCH body entirely, «حذف» sends `""`, a chosen file sends the data URI. Folding the
+  first two together is the one change here that would quietly delete an image.
   - `ui/Modal` renders through a **portal onto `<body>`**: `MainLayout` scrolls the content area rather
     than the page, so a dialog declared inside a page would be clipped by that box. Its z-index has to
     clear the sidebar's `z-[9999999]` and stay under the toaster's `99999999`, so a failed submit reports
