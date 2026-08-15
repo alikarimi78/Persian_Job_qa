@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from ..accounts import set_password
 from ..auth import create_token, get_current_user, verify_password
 from ..database import get_db
 from ..models import User
 from ..rate_limit import login_key, login_limiter
-from ..schemas import LoginIn, MeOut, TokenOut
+from ..schemas import LoginIn, MeOut, SelfPasswordIn, TokenOut, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -35,6 +36,34 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Account is blocked")
     login_limiter.reset(key)
     return TokenOut(access_token=create_token(user), role=user.role.value)
+
+
+@router.post("/password", response_model=UserOut)
+def change_own_password(body: SelfPasswordIn, request: Request,
+                        user: User = Depends(get_current_user),
+                        db: Session = Depends(get_db)):
+    """The caller's own password — the one password endpoint that acts on the caller.
+
+    `/accounts/{id}/password` deliberately cannot: nobody may act on their own account
+    there, which is right for blocking and deletion but leaves a super_admin unable to
+    change their own password at all, since there is nobody above them to do it for
+    them. This is what fills that gap, at every level rather than only at the top.
+
+    What stands in for an admin's authority here is the current password, and it is not
+    a formality: without it a token left behind on a shared machine — good for an hour —
+    would be enough to take the account for good.
+
+    Wrong attempts are charged to the same budget as login, on the same source+username
+    key: both are password guesses against one account, and getting it right gives the
+    budget back either way.
+    """
+    key = login_key(request, user.username)
+    login_limiter.check(key)
+    if not verify_password(body.current_password, user.hashed_password):
+        login_limiter.hit(key)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Current password is incorrect")
+    login_limiter.reset(key)
+    return set_password(db, user, body.new_password)
 
 
 @router.get("/me", response_model=MeOut)

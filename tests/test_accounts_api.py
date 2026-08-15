@@ -268,6 +268,71 @@ def test_moving_an_account_that_lives_in_no_unit_is_409(world, as_user):
                                json={"unit_id": world.unit_a1.id}).status_code == 409
 
 
+# ---------- move an org_admin between organizations ----------
+
+def test_an_organizations_admin_moves_to_another_organization(world, db, as_user):
+    """The `/unit` endpoint has nothing to offer an org_admin — it lives in an
+    organization, not in a unit — so this is the whole of «ویرایش» for that row."""
+    fresh = Organization(name="org-c")
+    db.add(fresh)
+    db.commit()
+
+    response = as_user(world.root)("POST", f"/accounts/{world.admin_a.id}/organization",
+                                   json={"organization_id": fresh.id})
+    assert response.status_code == 200
+    assert response.json()["organization_id"] == fresh.id
+    assert response.json()["role"] == "org_admin"
+
+
+def test_the_organization_it_leaves_can_be_restaffed(world, db, as_user):
+    fresh = Organization(name="org-c")
+    db.add(fresh)
+    db.commit()
+
+    root = as_user(world.root)
+    root("POST", f"/accounts/{world.admin_a.id}/organization",
+         json={"organization_id": fresh.id})
+    assert root("POST", "/accounts/org-admins",
+                json={"username": "admin-a-new", "password": "password12",
+                      "organization_id": world.org_a.id}).status_code == 201
+
+
+def test_moving_into_an_organization_that_already_has_an_admin_is_409(world, as_user):
+    response = as_user(world.root)("POST", f"/accounts/{world.admin_a.id}/organization",
+                                   json={"organization_id": world.org_b.id})
+    assert response.status_code == 409
+    assert "admin-b" in response.json()["detail"]
+
+
+def test_submitting_the_organization_it_is_already_in_is_not_a_conflict(world, as_user):
+    """Otherwise re-saving an unchanged form would 409 against the row itself."""
+    assert as_user(world.root)("POST", f"/accounts/{world.admin_a.id}/organization",
+                               json={"organization_id": world.org_a.id}).status_code == 200
+
+
+def test_moving_an_account_that_lives_in_no_organization_is_409(world, as_user):
+    """Everyone below an org_admin belongs to a unit; `/unit` is their move."""
+    assert as_user(world.root)("POST", f"/accounts/{world.user_a1.id}/organization",
+                               json={"organization_id": world.org_b.id}).status_code == 409
+
+
+@pytest.mark.parametrize("caller", ["admin_a", "admin_b", "admin_a1", "user_a1"])
+def test_only_a_super_admin_moves_an_organizations_admin(world, db, as_user, caller):
+    """An org_admin has no second organization to move a peer into, and cannot manage
+    one in the first place."""
+    fresh = Organization(name="org-c")
+    db.add(fresh)
+    db.commit()
+    assert as_user(getattr(world, caller))(
+        "POST", f"/accounts/{world.admin_a.id}/organization",
+        json={"organization_id": fresh.id}).status_code == 403
+
+
+def test_moving_to_an_organization_that_does_not_exist_is_404(world, as_user):
+    assert as_user(world.root)("POST", f"/accounts/{world.admin_a.id}/organization",
+                               json={"organization_id": 9999}).status_code == 404
+
+
 # ---------- delete ----------
 
 def test_a_unit_admin_deletes_its_own_users_only(world, db, as_user):

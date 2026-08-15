@@ -175,10 +175,30 @@ class MoveUnitIn(BaseModel):
     unit_id: int
 
 
+class MoveOrganizationIn(BaseModel):
+    """The same, for the one role that does not live in a unit: an organization's admin
+    belongs to the organization directly, so its «ویرایش» is this and not `MoveUnitIn`."""
+    organization_id: int
+
+
 class PasswordResetIn(BaseModel):
     """An admin setting a password for someone below them. The old password is not
     required — the point is to restore access to an account whose password is lost."""
     password: str = Field(min_length=8, max_length=128)
+
+
+class SelfPasswordIn(BaseModel):
+    """`POST /auth/password` — an account changing its own password.
+
+    Requiring the current one is the whole difference from `PasswordResetIn`, and it is
+    what makes a self-service endpoint safe to have: an admin resetting somebody else's
+    password is authorised by *being* that admin, while an account changing its own has
+    only its token to show, and a token is exactly what gets left behind on a borrowed
+    machine. Without this field an hour of borrowed access would be a permanent
+    takeover.
+    """
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class UserOut(BaseModel):

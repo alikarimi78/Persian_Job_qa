@@ -236,6 +236,7 @@ POST /accounts/users          super_admin | unit_admin
 GET  /accounts                super_admin | org_admin | unit_admin   scoped, ?role=&unit_id=&organization_id=
 POST   /accounts/{id}/block · /unblock · /password     any admin, over accounts below them
 POST   /accounts/{id}/unit    super_admin | org_admin  move an account to another unit
+POST   /accounts/{id}/organization   super_admin       move an organization's admin to another one
 DELETE /accounts/{id}         any admin, over accounts below them
 POST /orgs · GET /orgs · GET /orgs/{id} · PATCH /orgs/{id} · DELETE /orgs/{id}
                               super_admin (org_admin reads its own)
@@ -244,6 +245,7 @@ POST /units · GET /units · GET /units/{id} · PATCH /units/{id} · DELETE /uni
                               super_admin | org_admin
                                                  (a unit_admin only *reads* its own unit)
 GET  /auth/me                 any account: role plus the organization/unit it sits in
+POST /auth/password           any account: its own password, against the current one
 GET  /stats                   super_admin | org_admin | unit_admin   dashboard counts, scoped as /accounts
 POST /reports/search          any account: an answer it already has, printed as a PDF
 ```
@@ -288,7 +290,8 @@ downwards:
 you may act on the accounts you could have created. An org_admin therefore reaches the unit admins and
 users of its own organization but not its peers; a unit_admin reaches only the ordinary users of its unit.
 **Nobody may act on their own account**, at any level: an admin who blocks themselves would need someone
-above them to undo it, and a unit_admin has nobody above them inside their unit.
+above them to undo it, and a unit_admin has nobody above them inside their unit. The one thing an account
+does to itself goes through a different endpoint and a different proof — `POST /auth/password`, below.
 
 `is_active` is checked in two places on purpose. `routers/auth.py:login` refuses a blocked account with
 403 rather than the 401 given for a wrong password — the password *was* right, and the person needs to
@@ -300,10 +303,20 @@ its unit and everything it has suggested; nothing is deleted.
 **Moving** (`POST /accounts/{id}/unit`) needs two permissions at once, and that pair is what keeps an
 org_admin inside their organization: `assert_can_manage_account` over the account plus `assert_manages_unit`
 over the destination. It is closed to a unit_admin on purpose — they run one unit, and a move is a decision
-about two of them. Only accounts that live in a unit can move (`user`, `unit_admin`; an org_admin belongs to
-an organization and a super_admin to nothing), the role is unchanged by the move, and a unit_admin may only
+about two of them. Only accounts that live in a unit can move here (`user`, `unit_admin`; a super_admin
+belongs to nothing and has nowhere to go), the role is unchanged by the move, and a unit_admin may only
 land in a unit that has no admin — checked in `move_to_unit` so the answer is a 409 naming the sitting admin
 rather than an IntegrityError from the partial unique index.
+
+An **org_admin moves through `POST /accounts/{id}/organization`** instead, because it belongs to an
+organization directly and `/unit` has nothing to offer it. Same shape, one level up: the role survives the
+move, the destination must have no admin (a 409 naming them, not an IntegrityError), and re-submitting the
+organization the account is already in is a no-op rather than a conflict against its own row. It is
+**super-admin only**, and that is derived rather than declared: `assert_can_manage_account` already refuses
+an org_admin every peer — a peer has no unit through which it could sit inside their organization — and an
+org_admin has no second organization to move anyone into. Between the two endpoints, «ویرایش» of an account
+is exactly *where it sits*: a role decides which scope column the row carries, and a username is the
+credential.
 
 **Deletion** (`DELETE /accounts/{id}`) is the irreversible counterpart of blocking. It depends on migration
 `0005`: `jobs_info.suggested_by` / `reviewed_by` are `ON DELETE SET NULL`, so a record the deleted account
@@ -351,10 +364,25 @@ migration `0006` from the customer's `admin_panel.mp4` («شناسه سازما�
   declared mime against the file's own magic bytes and refuses SVG outright: the type decides how the
   bytes are served back to a browser, so believing it would make this field stored XSS.
 
-Not implemented, and absent on purpose rather than forgotten: renaming an *account* (login is by username,
-so the name is the credential), and a user changing their own password (only an admin above them can, via
-`/accounts/{id}/password`, which deliberately does not ask for the old one — it exists for the account that
-cannot supply it).
+Not implemented, and absent on purpose rather than forgotten: renaming an *account* — login is by username,
+so the name is the credential.
+
+**The two password endpoints are not variants of each other.** `POST /accounts/{id}/password` is an admin
+setting somebody else's, and deliberately does not ask for the old one: it exists precisely for the account
+that cannot supply it. `POST /auth/password` is an account changing its **own**, and requires the current
+one. That field is what replaces the authority the admin had — a self-service reset without it would turn
+a token left behind on a shared machine, good for an hour, into a permanent takeover. Wrong attempts spend
+from the *login* budget on the same source+username key (`app/rate_limit.py`), because both are password
+guesses against one account, and a correct one hands the budget back either way.
+
+`/auth/password` is what closes the one gap in "nobody may act on their own account": every other role has
+an admin above them who can reset their password, and a **super_admin has nobody**, so before this endpoint
+existed the top of the hierarchy was the one account whose password could never be changed. It is open to
+every role rather than only to the top one — the current password is what makes it safe, and that argument
+does not depend on the caller's role. The client surfaces it twice for that reason: on the caller's own
+row in `/manage/accounts`, and in the **header dropdown**, which is the only one of the two an ordinary
+user can reach — and the only one an org_admin can, since `visible_users` reaches accounts through their
+unit and an org_admin has none, so it never appears in its own listing.
 
 ### Rate limiting
 
@@ -371,7 +399,9 @@ The two are keyed differently because they are protecting different things:
   (`check()` before the bcrypt comparison, `hit()` on failure, `reset()` on success). Guessing one
   account runs out of attempts; someone who signs in correctly all day never does. A username that does
   not exist is charged too, or the 401 that costs nothing would tell an attacker which names are worth
-  working on. A blocked account's 403 spends nothing — the password was right.
+  working on. A blocked account's 403 spends nothing — the password was right. `POST /auth/password`
+  spends from this same budget on the same key, on purpose: a wrong `current_password` is a password
+  guess against that account like any other, and the two must not be one bucket each to walk between.
 - **`/search`** — keyed on the *account* (`search_rate_limit` wraps `get_current_user`, so
   authentication comes first and an anonymous caller gets 401 rather than burning a budget). Per account
   and not per IP because a whole unit sits behind one office address, and the cost being capped is an
@@ -485,6 +515,16 @@ company to build the reference's profile links from. The reference's desktop dro
 `right-0`, which in RTL hangs it off the side of the page — it is anchored `left-0` here, as the
 reference's own mobile header already does.
 
+Under that summary the dropdown carries the two things an account does to *itself*: «تغییر رمز» and
+«خروج از حساب», as `layout/UserMenu.jsx:AccountActions` — one copy for both header modes, which is the
+fix for the pair having been written out twice in `DesktopMode`/`MobileMode` and drifting the moment
+there was a second action. The dialog is `SelfPasswordDialog` and is owned by `Header` rather than by
+either mode, so one of it exists whichever mode is drawn and it survives the breakpoint. This is the
+only route to a password change for an ordinary user and for an org_admin — `/manage/accounts` is
+admin-only, and an org_admin does not appear in its own listing there (`visible_users` reaches accounts
+through their unit, and an org_admin has none). Opening it closes the dropdown: the panel is not modal
+and would otherwise still be hanging open behind the dialog afterwards.
+
 Two things in the client are coupled to this repo:
 
 - `src/components/JobForm.jsx` holds the ten columns a second time, and backs both `POST /jobs/suggestions`
@@ -534,8 +574,8 @@ Two things in the client are coupled to this repo:
   `style_files/`, alongside the eight reference `.tsx`). Its pattern, and now theirs: a `ui/PageToolbar`
   whose one green «افزودن … جدید» button opens a dialog, a `ui/DataTable` under it, and a «عملیات‌ها»
   column of round `ui/IconButton`s that each open a dialog of their own. **Nothing is created or edited on
-  the page any more** — `components/manage/Forms.jsx` is six dialogs (`NameDialog`, `OrganizationDialog`,
-  `CredentialsDialog`, `PasswordDialog`, `ConfirmDialog`, `DetailsDialog`) rather than the cards it used
+  the page any more** — `components/manage/Forms.jsx` is seven dialogs (`NameDialog`, `OrganizationDialog`,
+  `CredentialsDialog`, `PasswordDialog`, `SelfPasswordDialog`, `ConfirmDialog`, `DetailsDialog`) rather than the cards it used
   to be. `NameDialog` is the units' now: an organization outgrew it when it gained a profile, and
   `OrganizationDialog` lays the six fields out two per row exactly as the reference does — a
   `grid-cols-2`, not an `auto-fit` track, which at this width silently becomes three columns and re-pairs
@@ -554,12 +594,20 @@ Two things in the client are coupled to this repo:
   - `RowActions` is `justify-end`, which under `dir="rtl"` anchors the group at the **left**, so delete is
     written last everywhere and keeps its position whatever else a row does or does not offer. Reading
     right to left the buttons come out edit, view, delete — the reference's own order.
-  - `src/components/AccountsTable.jsx` carries the row actions — block/unblock, reset password, move to a
-    unit, delete — each now a dialog rather than an inline panel. «ویرایش» on an account is the *unit* and
+  - `src/components/AccountsTable.jsx` carries the row actions — block/unblock, reset password, move,
+    delete — each now a dialog rather than an inline panel. «ویرایش» on an account is *where it sits* and
     nothing else: a role decides which scope column the row carries, and a username is the credential you
-    log in with, so neither has an endpoint. It repeats the backend's rules in `canManage()` and
-    `canMove()` purely so the table does not offer a button that would come back 403; the server is still
-    the one enforcing them, and the pairs must be changed together.
+    log in with, so neither has an endpoint. That makes the pencil **one dialog over two endpoints**,
+    branching on the row's own scope column (`movingOrganization`): an org_admin picks an organization,
+    everyone else a unit. It repeats the backend's rules in `canManage()`, `canMove()` and
+    `canMoveOrganization()` purely so the table does not offer a button that would come back 403; the
+    server is still the one enforcing them, and the pairs must be changed together.
+  - The caller's **own row** carries one action of its own — the key, opening `SelfPasswordDialog`
+    (current password + new, `POST /auth/password`). Every other button is hidden there because nobody may
+    act on their own account, which is exactly why this one cannot reuse the admin reset. The same dialog
+    hangs off the header dropdown for everybody (see *The client is a sibling repo* above); it is
+    duplicated here because this is the page an admin is already on when they think about accounts, and a
+    super_admin's own row is the one the thought usually starts from.
   - Organizations and units get a «تعریف ادمین» button as a **fourth row action**, shown only while the
     seat is empty. The page still does not try to predict whether a container is empty before deleting —
     it asks, and shows the 409 the server answers with.

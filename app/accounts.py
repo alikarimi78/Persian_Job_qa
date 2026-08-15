@@ -116,6 +116,34 @@ def move_to_unit(db: Session, target: User, unit: Unit) -> User:
     return target
 
 
+def move_to_organization(db: Session, target: User, organization: Organization) -> User:
+    """Moves an organization's admin to another organization, keeping its role.
+
+    The counterpart of `move_to_unit` for the one role that does not sit in a unit.
+    `ck_users_scope` gives a non-NULL organization_id to org_admin rows and to no other
+    role, so the first check is also what refuses everybody else — a unit_admin or user
+    moves through `/unit`, and a super_admin belongs nowhere.
+
+    The second check turns the partial unique index into a 409 naming the admin already
+    sitting there, the way creation does. It is skipped when the destination is the
+    organization the account is already in, or re-submitting an unchanged form would be
+    refused on account of the row itself.
+    """
+    if target.organization_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"A {target.role.value} does not belong to an organization")
+    if organization.id != target.organization_id:
+        taken = db.query(User).filter(User.role == Role.org_admin,
+                                      User.organization_id == organization.id).first()
+        if taken:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                f"Organization already has an admin ({taken.username})")
+    target.organization_id = organization.id
+    db.commit()
+    db.refresh(target)
+    return target
+
+
 def set_active(db: Session, target: User, active: bool) -> User:
     target.is_active = active
     db.commit()

@@ -17,13 +17,13 @@ from sqlalchemy.orm import Session
 
 from ..accounts import (assert_can_manage_account, assert_manages_organization,
                         assert_manages_unit, create_account, delete_account, get_account,
-                        get_organization, get_unit, move_to_unit, set_active, set_password,
-                        visible_users)
+                        get_organization, get_unit, move_to_organization, move_to_unit,
+                        set_active, set_password, visible_users)
 from ..auth import require_roles, require_super_admin
 from ..database import get_db
 from ..models import Role, Unit, User
-from ..schemas import (AccountIn, MoveUnitIn, OrgAdminIn, PasswordResetIn, UnitAdminIn,
-                       UserAccountIn, UserOut)
+from ..schemas import (AccountIn, MoveOrganizationIn, MoveUnitIn, OrgAdminIn,
+                       PasswordResetIn, UnitAdminIn, UserAccountIn, UserOut)
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -120,6 +120,28 @@ def move_account(user_id: int, body: MoveUnitIn,
     unit = get_unit(db, body.unit_id)
     assert_manages_unit(actor, unit)
     return move_to_unit(db, target, unit)
+
+
+@router.post("/{user_id}/organization", response_model=UserOut)
+def move_account_organization(user_id: int, body: MoveOrganizationIn,
+                              actor: User = Depends(require_super_admin),
+                              db: Session = Depends(get_db)):
+    """Moves an organization's admin into another organization, keeping its role.
+
+    The counterpart of `/unit` for the one role that lives in an organization rather
+    than in a unit — and the whole of what «ویرایش» means for such an account, since a
+    role decides which scope column the row carries and a username is the credential.
+
+    Super-admin only, and not by omission: `assert_can_manage_account` already refuses
+    an org_admin every other org_admin (a peer has no unit through which it could be
+    inside their organization), and an org_admin has no second organization to move
+    anyone into. It is still asked here, because it is also what stops a caller acting
+    on their own row.
+    """
+    target = get_account(db, user_id)
+    assert_can_manage_account(actor, target)
+    organization = get_organization(db, body.organization_id)
+    return move_to_organization(db, target, organization)
 
 
 @router.delete("/{user_id}", status_code=204)

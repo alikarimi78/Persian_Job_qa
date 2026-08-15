@@ -132,6 +132,57 @@ def test_a_blocked_unit_admin_does_not_block_its_unit(world, db, client):
                        json={"username": "user-a1", "password": PASSWORD}).status_code == 200
 
 
+# ---------- POST /auth/password: the caller's own ----------
+
+def test_an_account_changes_its_own_password(world, as_user, client):
+    response = as_user(world.user_a1)("POST", "/auth/password",
+                                      json={"current_password": PASSWORD,
+                                            "new_password": "brand-new-one"})
+    assert response.status_code == 200
+    assert client.post("/auth/login", json={"username": "user-a1",
+                                            "password": "brand-new-one"}).status_code == 200
+    assert client.post("/auth/login", json={"username": "user-a1",
+                                            "password": PASSWORD}).status_code == 401
+
+
+def test_a_super_admin_can_change_its_own_password(world, as_user, client):
+    """The case the endpoint exists for: `/accounts/{id}/password` refuses the caller's
+    own row, and a super_admin has nobody above them to do it for them."""
+    root = as_user(world.root)
+    assert root("POST", f"/accounts/{world.root.id}/password",
+                json={"password": "brand-new-one"}).status_code == 403
+    assert root("POST", "/auth/password",
+                json={"current_password": PASSWORD,
+                      "new_password": "brand-new-one"}).status_code == 200
+    assert client.post("/auth/login", json={"username": "root",
+                                            "password": "brand-new-one"}).status_code == 200
+
+
+def test_the_current_password_is_required_and_checked(world, as_user, client):
+    """The token alone is not enough — otherwise a session left open on a shared machine
+    would be a permanent takeover rather than an hour of borrowed access."""
+    caller = as_user(world.admin_a1)
+    assert caller("POST", "/auth/password",
+                  json={"current_password": "not-the-one",
+                        "new_password": "brand-new-one"}).status_code == 401
+    assert caller("POST", "/auth/password",
+                  json={"new_password": "brand-new-one"}).status_code == 422
+    # and nothing was changed by either attempt
+    assert client.post("/auth/login", json={"username": "admin-a1",
+                                            "password": PASSWORD}).status_code == 200
+
+
+def test_a_short_new_password_is_refused(world, as_user):
+    assert as_user(world.user_a1)("POST", "/auth/password",
+                                  json={"current_password": PASSWORD,
+                                        "new_password": "short"}).status_code == 422
+
+
+def test_changing_a_password_needs_a_token(client):
+    assert client.post("/auth/password", json={"current_password": "x",
+                                               "new_password": "brand-new-one"}).status_code == 401
+
+
 def test_me_resolves_the_organization_through_the_unit(world, as_user):
     """`users.organization_id` is NULL for everyone below an org_admin — their
     organization is reached through their unit, so it can never drift out of step."""
