@@ -309,6 +309,102 @@ class ReportIn(BaseModel):
     related_jobs: list[ReportLabel] | None = Field(default=None, max_length=20)
 
 
+# ---------- advanced search ----------
+# The columns a person may describe themselves with, duplicated from
+# `job_qa_service/columns.py:PROFILE_FIELDS` — the same duplication the ten content
+# columns already live with, and for the same reason: `tests/conftest.py` replaces the
+# whole engine package with a stub, so importing the real list here would break every
+# test in the suite. The two lists must be changed together.
+#
+# `tools` is absent from both on purpose: 1099 of the 1116 cells hold untranslated
+# English tool names, so a Persian item could never match one. The note in `columns.py`
+# is the long version.
+PROFILE_FIELDS = ["skills", "knowledge", "abilities", "responsibilities",
+                  "work_context", "career_path_next"]
+# Enough of a profile to be worth ranking 1116 records against. Fewer than this and the
+# result is whatever the corpus happens to say most often, dressed up as an analysis.
+PROFILE_REQUIRED_FIELD = "skills"
+PROFILE_MIN_ITEMS = 2
+PROFILE_MIN_FIELDS = 2
+PROFILE_MAX_ITEMS = 20
+
+# Bounded but not required to be non-empty: a blank arriving from the client's «+» row
+# is dropped by the validator below rather than failing the whole request, which would
+# refuse a profile over a box the user never filled in.
+ProfileItem = Annotated[str, StringConstraints(max_length=120)]
+
+
+class ProfileSearchIn(BaseModel):
+    """`POST /search/advanced` — what someone can do, not a question about a job.
+
+    Items arrive as a **list**, never as one «|»-joined string. That is the whole point
+    of the client's repeatable input: the separator was a guess the user had to make
+    («،» or «,» or «|»), and every wrong guess became one long item that matched
+    nothing. Splitting is still done in the engine for pasted text, but the shape the
+    API accepts is the shape the data has.
+    """
+    profile: dict[str, list[ProfileItem]]
+
+    @field_validator("profile")
+    @classmethod
+    def _check(cls, profile):
+        unknown = [key for key in profile if key not in PROFILE_FIELDS]
+        if unknown:
+            raise ValueError("Unknown profile fields: " + ", ".join(sorted(unknown)))
+
+        cleaned = {}
+        for key, items in profile.items():
+            if len(items) > PROFILE_MAX_ITEMS:
+                raise ValueError(f"{key}: at most {PROFILE_MAX_ITEMS} items")
+            kept = [item.strip() for item in items if item.strip()]
+            if kept:
+                cleaned[key] = kept
+
+        required = cleaned.get(PROFILE_REQUIRED_FIELD, [])
+        if len(required) < PROFILE_MIN_ITEMS:
+            raise ValueError(
+                f"{PROFILE_REQUIRED_FIELD}: at least {PROFILE_MIN_ITEMS} items are required")
+        if len(cleaned) < PROFILE_MIN_FIELDS:
+            raise ValueError(f"At least {PROFILE_MIN_FIELDS} fields must be filled in")
+        return cleaned
+
+
+class ProfileFieldOut(BaseModel):
+    """One column of the profile, against one record: which of the user's items that
+    record accounted for and which it did not — in the user's own words, so the list
+    can be checked against what they typed."""
+    key: str
+    label: str
+    matched: list[str] = []
+    missing: list[str] = []
+    ratio: float
+
+
+class ProfileMatchOut(BaseModel):
+    """One ranked record. `score` is what the order is by; `dense` and `coverage` are
+    the two halves it was blended from, kept separate because they answer different
+    questions — how alike the whole profile is, and how many of the listed items were
+    literally found."""
+    job_title: str
+    score: float
+    dense: float
+    coverage: float
+    fields: list[ProfileFieldOut] = []
+    detail: JobDetailOut
+
+
+class ProfileSearchOut(BaseModel):
+    """Deliberately not `SearchOut`. That type is one answer about one job; this is a
+    ranking, and it can never carry `job_draft` — the advanced path analyses the corpus
+    that exists and never designs a record."""
+    mode: str                       # 'profile_match' | 'out_of_domain'
+    intent: str                     # always 'profile'
+    answer: str
+    job: str | None = None
+    score: float | None = None
+    matches: list[ProfileMatchOut] = []
+
+
 class JobIn(BaseModel):
     """All dataset columns are required for a suggestion."""
     job_title: str = Field(min_length=2, max_length=255)

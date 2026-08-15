@@ -40,7 +40,15 @@ Adding or renaming a content column means touching all of: `app/models.py`, `app
 than loudly — a column absent from `_combined_text` is simply never embedded, and one missing from
 `JobForm` makes every suggestion submit fail with a 422 that names a field the form has no input for.
 A column that is prose rather than a `|`-joined list also belongs in `PROSE_COLUMNS`; otherwise its box
-renders the sentence as a one-item list.
+renders the sentence as a one-item list. If people should be able to *search* on it, it goes in
+`PROFILE_FIELDS` as well — which is three lists, not one: `job_qa_service/columns.py`, its copy in
+`app/schemas.py`, and `src/pages/Analyze.jsx`'s `FIELDS`. The copy in `app/schemas.py` exists because
+`tests/conftest.py` stubs the whole engine package away, so importing the real list there would break
+the suite; a field named in one and not the others is a 422 naming a key the form has no box for.
+
+A **list column is entered one item at a time** in the client (`ui/ItemsInput`) and joined with `|` at
+the edge, so nothing downstream changed — but a new list column has to be in `JobForm`'s `LISTS` rather
+than its `PROSE`, or it is submitted as a bare string and the items are never split.
 
 ## Commands
 
@@ -78,8 +86,10 @@ venv/bin/python3 -m pytest                                # the whole suite, ~20
 `tests/` covers **`app/` only** — the scope and permission rules (`test_account_scope.py`,
 `test_accounts_api.py`, `test_tenancy_api.py`), what a token proves (`test_auth.py`), the settings that
 must crash rather than default (`test_config.py`), the two rate limits (`test_rate_limit.py`), that
-the dashboard's counts stop where its caller's authority does (`test_stats_api.py`), and what the PDF
-report puts on a page (`test_reports_api.py`). It
+the dashboard's counts stop where its caller's authority does (`test_stats_api.py`), what the PDF
+report puts on a page (`test_reports_api.py`), and what a profile has to carry before advanced search
+will run one (`test_advanced_search_api.py` — the contract and the gates around the ranking, never the
+ranking itself, which needs the real engine). It
 needs neither Postgres nor torch: `tests/conftest.py` puts the required variables in `os.environ`,
 points `DATABASE_URL` at in-memory SQLite, and installs a **stub `job_qa_service`** in `sys.modules`
 before `app` is imported, because `app.routers.search` pulls the engine package in through
@@ -248,6 +258,7 @@ GET  /auth/me                 any account: role plus the organization/unit it si
 POST /auth/password           any account: its own password, against the current one
 GET  /stats                   super_admin | org_admin | unit_admin   dashboard counts, scoped as /accounts
 POST /reports/search          any account: an answer it already has, printed as a PDF
+POST /search · /search/advanced    any account: a question, or a profile ranked against the corpus
 ```
 
 An org_admin deliberately **cannot** create ordinary users — it creates the units and their admins, and
@@ -430,6 +441,66 @@ The first super admin is created from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by the s
 migration; every other account comes from the API. Migration `0003` maps the old single `admin` role onto
 `super_admin`, so an existing deployment's admin keeps working.
 
+### Advanced search: a profile instead of a question (2026-08-15)
+
+`POST /search/advanced` is the other half of `/search`. There the user has a job in mind and wants prose
+about it; here they list **what they can do**, column by column, and the corpus is ranked against it.
+The unit is the *item* — one skill, one tool — and the answer is a ranking whose point is that it can
+name which of the user's own items each job accounted for. It is job **analysis**, and it deliberately
+cannot design a record: someone describing a job they *want* is still served by the free-text discovery
+path on `/search`, which was left exactly as it was.
+
+**Nothing new is encoded for it.** `profile.profile_query_text` writes the profile in the same shape
+`engine._combined_text` writes a record — same labels, same «، » joins — so one query encode meets the
+cached corpus vectors on their own terms. The dense channel is `emb_full` **alone**, without the
+question path's `W_TITLE` half: a list of skills has nothing to say to a job title, and mixing it in
+would be 40% noise. The other channel is `profile.coverage`, pure set arithmetic over tokens split once
+at engine build (`engine.profile_tokens`), and the final order is `PROFILE_W_DENSE * dense +
+PROFILE_W_COVER * coverage`. They are kept apart until that line because they fail differently — dense
+understands that «حل مسئله» and «تحلیل مشکلات» are the same thing but cannot say *which* item it
+honoured, and only what can be pointed at is ever shown to the user.
+
+Coverage is computed for **all 1116 records**, not for a retrieved shortlist: it costs ~100 ms of set
+operations, and a record matching every item the user typed must not be lost because dense ranked it
+20th. Measured end to end on CPU: ~280 ms per request, of which 155 ms is the one encode.
+
+Three decisions that are load-bearing, and what they were measured against:
+
+- **An item matches by containment, not by overlap.** One shared token is not enough — «طراحی سیستم»
+  and «طراحی لباس» share «طراحی» and are unrelated, and counting that would inflate every ratio on the
+  page with matches the reader can see are wrong. One side has to be fully covered by the other, prefix
+  matching in both directions so «برنامه‌نویس» reaches «برنامه‌نویسی».
+- **…and failing that, by column.** Item-to-item alone reported that «مکانیک خودرو» is absent from
+  «مکانیک‌ها و تکنسین‌های خدمات خودرو», because that record says «مهارت مکانیکی» in one member and «برق
+  و انژکتور خودرو» in another and neither contains both words. The column is the unit the user is
+  actually describing, so an item whose every word appears *somewhere* in the column counts too. The
+  price is a compound item scattered across unrelated members; under-reporting was wrong on the very
+  records the search exists to find, and this is the direction the error should lean.
+- **`tools` is not a profile field.** 1099 of the 1116 tool cells are untranslated English
+  (`AutoCAD | Revit | Adobe Acrobat`) — both sources, not just the O*NET rows — so a Persian item could
+  never match one and the field would report a permanent 0%, with the analysis text then telling the
+  person they lack every tool they listed. It stays in the suggestion form and in `_combined_text`,
+  where the dense channel still reads it. **Translating that column is what would let the list grow by
+  one line**, and is the single highest-value thing that could be done to this feature.
+
+`PROFILE_DENSE_ONLY` (0.62) is the same kind of line as `DISCOVERY_FLOOR` and has the same limit: a
+profile that matched **no item anywhere** still needs a strong dense score to count as a match at all,
+because «تربیت اژدها / پرواز با جارو / عصای جادویی» measures 0.53 against «مربیان حیوانات» — dense
+similarity is topical and cannot tell a real occupation from an invented one. Real profiles measure
+0.65–0.75 on their own occupation even when the wording differs, which is the only gap the line can sit
+in. Unlike the discovery path there is no LLM realism check here, and there does not need to be: this
+path never creates anything, so the worst case is five jobs at 0% coverage, which is what the gate
+turns into «هیچ شغلی … هم‌خوانی ندارد».
+
+What a profile must carry is in `config.py` — `skills` with at least two items, and at least two fields
+filled. `skills` because it is the column that most decides what an occupation *is*; a profile of tools
+alone would match every job that happens to use a computer. The rule is enforced in `app/schemas.py`
+(so the answer is a 422 naming the field) and repeated in the client (so the button is simply disabled
+until it is met); the engine only projects onto its own field list and ignores anything else.
+
+The report endpoint does **not** print these results — `POST /reports/search` takes a `SearchOut`, and a
+ranking is a different document. That is the obvious next thing to add if anyone asks for it.
+
 ### PDF reports (`app/reports/`)
 
 `POST /reports/search` prints a search answer as an A4 report: masthead, who issued it and when, the
@@ -528,9 +599,19 @@ and would otherwise still be hanging open behind the dialog afterwards.
 Two things in the client are coupled to this repo:
 
 - `src/components/JobForm.jsx` holds the ten columns a second time, and backs both `POST /jobs/suggestions`
-  and `POST /admin/jobs`. It is the one place outside this repo that a column change has to reach. The
-  «|» rule is stated once by the page's card and demonstrated by each list column's placeholder, rather
-  than repeated under every field.
+  and `POST /admin/jobs`. It is one of the places outside this repo that a column change has to reach.
+  Its three prose columns are text boxes and **its seven list columns are `ui/ItemsInput`** — one item at
+  a time, «+» to add — joined with «|» on submit and split back apart when a generated draft prefills the
+  form. The «|» rule it used to state is gone from the page, because the user no longer types the
+  separator: that was a guess they had to make («،» or «,» or «|»), and a wrong guess became one
+  unsplittable cell that no search could match, on both sides of the system at once. Text pasted with a
+  separator still in it is split rather than refused, and a space is deliberately not a separator —
+  «حل مسئله» is one item.
+- `src/pages/Analyze.jsx` (`/analyze`, its own sidebar item) is the advanced search: the six
+  `PROFILE_FIELDS` as `ItemsInput`s, and `components/ProfileMatches.jsx` for the ranking under it. Each
+  match draws its coverage bar and then every item the user typed — matched ones in green, missed ones
+  struck through — because the gap is half of what makes it an analysis. It reuses `JobDetails` for the
+  record itself rather than growing a second way to render a job.
 - `src/components/JobDetails.jsx` renders the `details` payload of a search result as one collapsible box
   per field, under the generated answer. It is deliberately *not* a third copy of the column list: labels,
   order, list-splitting and which boxes open all arrive from the backend, so a new content column shows up
@@ -635,15 +716,19 @@ embedding cache still hits.
 | `text.py` | `normalize_text`, `clean_markdown`, `parse_json_object`, `corpus_fingerprint` |
 | `intents.py` | `is_job_request`, `detect_intent`, and their keyword/pattern tables |
 | `bm25.py` / `ranking.py` | sparse channel / the question-path title tiebreak |
+| `profile.py` | advanced search: items in, coverage out — no embeddings of its own |
 | `llm.py` | `LLMClient`: the chat call that returns `""` instead of raising |
 | `render.py` | `build_context`, `template_one`/`template_two`, `render_draft`, `job_detail` |
 | `emb_store.py` | `EmbeddingStore`: one cached vector per text, so a rebuild encodes only what changed |
-| `engine.py` | `JobQAEngine`: corpus, embeddings, retrieval, the two answer paths |
+| `engine.py` | `JobQAEngine`: corpus, embeddings, retrieval, the three answer paths |
 
 `__init__.py` re-exports the public names and is where stdio is forced to UTF-8; `__main__.py` is the
 REPL, so the entrypoint is `python3 -m job_qa_service`.
 
-`answer()` branches on intent detection **before** retrieval:
+There are two public entry points. `analyze()` is the profile path — see *Advanced search* above; it
+shares the corpus, the encoder and the cached vectors with everything below and adds no state beyond
+`engine.profile_tokens`. `answer()` is the sentence path, and it branches on intent detection **before**
+retrieval:
 
 - **Job-request path** — `is_job_request()` decides this in two layers: a literal `JOB_REQUEST_KEYWORDS`
   list of fixed idioms (both ZWNJ and plain-space spellings, since hazm leaves «میخوام» alone), plus

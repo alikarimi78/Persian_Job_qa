@@ -9,22 +9,26 @@ import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 
+from . import profile as profile_match
 from .bm25 import BM25
 from .columns import (DISCOVERY_FIELDS, DISCOVERY_PRIMARY, EXPECTED_COLUMNS,
                       FIELD_LABELS, PROSE_COLUMNS)
 from .config import (DISCOVERY_FLOOR, DISCOVERY_MATCH, DISCOVERY_RELATED,
-                     EMBED_MODEL_NAME, MAX_CANDIDATES, PAIR_SIM_MAX, RRF_K, SCAN_DEPTH,
+                     EMBED_MODEL_NAME, MAX_CANDIDATES, PAIR_SIM_MAX, PROFILE_DENSE_ONLY,
+                     PROFILE_TOP_N, PROFILE_W_COVER, PROFILE_W_DENSE, RRF_K, SCAN_DEPTH,
                      SECONDARY_MARGIN, SECONDARY_MIN, THRESHOLD_MATCH, THRESHOLD_SPARSE,
                      W_FULL, W_TITLE)
 from .emb_store import store
 from .intents import (EXPLICIT_COMBO_WORDS, INTENT_TO_FIELDS, QUESTION_WORDS,
                       detect_intent, is_job_request)
 from .llm import LLMClient
-from .messages import (DISCOVERY_NOT_REAL, DISCOVERY_UNAVAILABLE, MATCH_HEADER, OOD_MESSAGE)
+from .messages import (DISCOVERY_NOT_REAL, DISCOVERY_UNAVAILABLE, MATCH_HEADER,
+                       OOD_MESSAGE, PROFILE_NONE)
 from .prompts import (SYSTEM_INTERDISCIPLINARY, SYSTEM_JOB_GENERATE, SYSTEM_JOB_MATCH,
-                      SYSTEM_SINGLE)
+                      SYSTEM_PROFILE_ANALYZE, SYSTEM_SINGLE)
 from .ranking import prefer_title_match
-from .render import build_context, job_detail, render_draft, template_one, template_two
+from .render import (build_context, job_detail, profile_context, render_draft,
+                     template_one, template_profile, template_two)
 from .text import normalize_text, parse_json_object
 
 try:
@@ -70,6 +74,11 @@ class JobQAEngine:
         self.model = shared_model()
         self.emb_full, self.emb_title = self._load_or_build_embeddings(rebuild_embeddings)
         self.bm25 = BM25(self.df["combined_text"].tolist())
+        # Advanced search compares item by item, so every record's items are split and
+        # tokenized once here rather than 1116 times per request. Nothing is encoded:
+        # this is the lexical half of that path (see profile.py).
+        self.profile_tokens = [profile_match.record_tokens(row)
+                               for _, row in self.df.iterrows()]
         self.llm = LLMClient()
 
     # ---------- data ----------
@@ -226,6 +235,79 @@ class JobQAEngine:
                 "details": [job_detail(draft, DISCOVERY_PRIMARY)]}
 
     # ---------- public API ----------
+    def analyze(self, profile, use_llm=True):
+        """Advanced search: rank the corpus against a described profile.
+
+        `profile` is `{column: [item, ...]}` over `columns.PROFILE_FIELDS` — what the
+        person can do, not a question about a job. Returns:
+
+            mode      'profile_match' | 'out_of_domain'
+            intent    'profile'
+            answer    the analysis prose (or the template, if the API gave nothing)
+            matches   PROFILE_TOP_N records, ranked, each with the per-field breakdown
+                      of which of the user's items it accounted for, plus its own
+                      `detail` in `job_detail`'s shape
+
+        Nothing here can invent a job. That is the whole difference from `_discover`,
+        which answers the same *need* from free text and may design a record: this path
+        is an analysis of the corpus as it stands, so an empty result says so rather
+        than filling the gap with a draft.
+        """
+        prof = profile_match.clean_profile(profile)
+        if not prof:
+            return {"mode": "out_of_domain", "intent": "profile",
+                    "answer": PROFILE_NONE, "matches": []}
+
+        # Dense against the full-record vectors only, not the hybrid the question path
+        # uses: `emb_title` measures a query against titles and aliases, and a list of
+        # skills has nothing to say to a job title. Mixing it in at W_TITLE would be
+        # 40% noise. Nothing new is encoded — the query is written in `_combined_text`'s
+        # own shape (profile.profile_query_text), so it meets the cached vectors on
+        # their own terms.
+        q_norm = normalize_text(profile_match.profile_query_text(prof))
+        q_emb = self._encode([q_norm], "query")[0]
+        dense = self.emb_full @ q_emb
+
+        # Coverage is computed for the whole corpus rather than for a retrieved
+        # shortlist: it is pure set arithmetic over pre-split tokens, and a record whose
+        # words match every item the user typed must not be lost because the dense
+        # channel ranked it 20th.
+        ranked = []
+        for idx in range(len(self.df)):
+            fields, ratio = profile_match.coverage(prof, self.profile_tokens[idx])
+            ranked.append((PROFILE_W_DENSE * float(dense[idx]) + PROFILE_W_COVER * ratio,
+                           float(dense[idx]), ratio, fields, idx))
+        ranked.sort(key=lambda r: r[0], reverse=True)
+
+        best = ranked[0]
+        # Nothing matched a single item the user typed, and dense alone is not strong
+        # enough to vouch for the corpus without that evidence. Both halves are needed:
+        # a profile written entirely in synonyms genuinely scores 0 here and is saved by
+        # the dense clause, while «تربیت اژدها» measures 0.53 — high enough to look like
+        # an answer, and it would come back as five unrelated jobs at 0% coverage.
+        if best[2] <= 0 and best[1] < PROFILE_DENSE_ONLY:
+            return {"mode": "out_of_domain", "intent": "profile", "score": best[1],
+                    "answer": PROFILE_NONE, "matches": []}
+
+        primary = list(prof.keys())
+        matches = []
+        for score, dense_score, ratio, fields, idx in ranked[:PROFILE_TOP_N]:
+            row = self.df.iloc[idx]
+            matches.append({"job_title": row["job_title"], "score": score,
+                            "dense": dense_score, "coverage": ratio, "fields": fields,
+                            "detail": job_detail(row, primary)})
+
+        ans = self.llm([
+            {"role": "system", "content": SYSTEM_PROFILE_ANALYZE},
+            {"role": "user", "content": profile_context(prof, matches)},
+        ], temperature=0.3, max_tokens=700) if use_llm else ""
+        if not ans:
+            ans = template_profile(matches)
+
+        return {"mode": "profile_match", "intent": "profile", "answer": ans,
+                "job": matches[0]["job_title"], "score": matches[0]["score"],
+                "matches": matches}
+
     def answer(self, question, use_llm=True):
         """Answers one question. Returns a dict with keys:
         mode ('single'|'interdisciplinary'|'job_match'|'job_generated'|'out_of_domain'),

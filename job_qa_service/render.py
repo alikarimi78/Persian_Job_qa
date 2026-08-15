@@ -3,7 +3,8 @@
 used whenever the API gives nothing back, and the per-field `details` payload."""
 
 from .columns import (DETAIL_FIELDS, EMPTY_CELLS, FIELD_LABELS, PROSE_COLUMNS)
-from .messages import DRAFT_HEADER, DRAFT_QUESTION, RELATED_LABEL
+from .messages import (DRAFT_HEADER, DRAFT_QUESTION, PROFILE_COVER_LABEL, PROFILE_HEADER,
+                       PROFILE_MISSING_LABEL, RELATED_LABEL)
 
 
 def build_context(row, fields, include_title=True):
@@ -37,6 +38,45 @@ def render_draft(draft, related):
     if related:
         lines += ["", f"{RELATED_LABEL}: " + "، ".join(related)]
     lines += ["", DRAFT_QUESTION]
+    return "\n".join(lines)
+
+
+def template_profile(matches):
+    """The advanced search's answer when the API gave nothing back.
+
+    It prints what the ranking already knows — the jobs, and which of the user's own
+    items each one accounted for — rather than apologizing for the missing analysis.
+    That is the same bargain every other fallback here makes: the endpoint answers with
+    data instead of failing because the API did.
+    """
+    lines = [PROFILE_HEADER]
+    for match in matches:
+        lines += ["", f"📌 {match['job_title']}"]
+        for field in match["fields"]:
+            if field["matched"]:
+                lines.append(f"{field['label']} — {PROFILE_COVER_LABEL}: "
+                             + "، ".join(field["matched"]))
+            if field["missing"]:
+                lines.append(f"{field['label']} — {PROFILE_MISSING_LABEL}: "
+                             + "، ".join(field["missing"]))
+    return "\n".join(lines)
+
+
+def profile_context(profile, matches):
+    """What the analysis model is shown: the profile, then each job with the comparison
+    already made. The model writes prose about this and never re-does the matching —
+    see rule 3 of SYSTEM_PROFILE_ANALYZE."""
+    lines = ["پروفایل کاربر:"]
+    lines += [f"{FIELD_LABELS.get(f, f)}: " + "، ".join(items)
+              for f, items in profile.items()]
+    for n, match in enumerate(matches, 1):
+        lines += ["", f"شغل {n}: {match['job_title']}"]
+        for field in match["fields"]:
+            lines.append(
+                f"{field['label']} — {PROFILE_COVER_LABEL}: "
+                + ("، ".join(field["matched"]) or "—")
+                + f" / {PROFILE_MISSING_LABEL}: "
+                + ("، ".join(field["missing"]) or "—"))
     return "\n".join(lines)
 
 

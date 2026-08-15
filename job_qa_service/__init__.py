@@ -15,10 +15,17 @@ names it and asks the user whether to register it, and the record itself is hand
 back in `job_draft` so the client can prefill its suggestion form with it. Storing
 it stays the user's call, and approving it stays the admin's.
 
+A third path answers a *profile* rather than a sentence (`engine.analyze`): the user
+lists what they can do, column by column, and the corpus is ranked against it by dense
+similarity plus a per-item overlap that can name which of their items each job
+accounted for. It is an analysis of the records that exist and never invents one —
+that is what separates it from the job-request path above.
+
 Backend usage:
     from job_qa_service import JobQAEngine
     engine = JobQAEngine("Merged_Occupations.xlsx")   # load once at startup
     result = engine.answer("وظایف افسر توپخانه چیست؟")  # thread-safe for reads
+    ranked = engine.analyze({"skills": ["حل مسئله", "کار تیمی"], "tools": ["پایتون"]})
 
 Modules, roughly in dependency order:
     config      env vars (read at import) + the thresholds retrieval is calibrated on
@@ -27,10 +34,11 @@ Modules, roughly in dependency order:
     text        normalization, Markdown stripping, JSON extraction, corpus digest
     intents     is this a job request, and which columns answer this question
     bm25        sparse channel;          ranking   the question-path title tiebreak
+    profile     advanced search: items in, coverage out (no embeddings of its own)
     llm         chat call that degrades to "" instead of raising
     render      context blocks, template answers, the per-field `details` payload
     emb_store   one cached vector per text, so a rebuild encodes only what changed
-    engine      JobQAEngine: corpus, embeddings, retrieval, the two answer paths
+    engine      JobQAEngine: corpus, embeddings, retrieval, the three answer paths
 
 Env vars (real process environment, not a .env): OPENAI_API_KEY, OPENAI_BASE_URL,
 LLM_MODEL, EMBED_MODEL_NAME, EMB_CACHE_DIR, OCCUPATIONS_PATH
@@ -47,7 +55,8 @@ for _stream in (sys.stdin, sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from .columns import EXPECTED_COLUMNS, FIELD_LABELS, PROSE_COLUMNS
+from .columns import (EXPECTED_COLUMNS, FIELD_LABELS, PROFILE_FIELDS, PROFILE_REQUIRED,
+                      PROSE_COLUMNS)
 from .engine import NOT_A_JOB, JobQAEngine
 from .intents import detect_intent, is_job_request
 from .render import build_context, job_detail
@@ -58,4 +67,5 @@ __all__ = [
     "normalize_text", "detect_intent", "is_job_request",
     "build_context", "job_detail",
     "EXPECTED_COLUMNS", "PROSE_COLUMNS", "FIELD_LABELS",
+    "PROFILE_FIELDS", "PROFILE_REQUIRED",
 ]

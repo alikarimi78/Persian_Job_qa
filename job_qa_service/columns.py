@@ -41,3 +41,35 @@ DISCOVERY_PRIMARY = ["description", "responsibilities"]
 # What the dataset writes in a cell it has nothing for. A box rendering «-» is
 # worse than no box, so such a cell is treated as absent.
 EMPTY_CELLS = {"", "-", "–", "—", "_"}
+
+# ---------- advanced search ----------
+# The columns a person may describe *themselves* with, in the order the form asks for
+# them. Deliberately not all ten: `job_title` and `aliases` are what the plain search
+# box is for — someone who knows the name of the job types it there — and `description`
+# is a summary of the other columns rather than something anyone lists.
+#
+# `work_context` is in the list although it is prose: the user still enters short
+# phrases («فضای باز»، «کار تیمی») and they are matched against the whole cell, since
+# there is nothing to split a sentence on. See `profile.record_items`.
+#
+# **`tools` is deliberately absent**, and this is a fact about the data rather than a
+# preference: the O*NET tool names were never translated, so 1099 of the 1116 cells are
+# Latin-only («AutoCAD | Revit | Adobe Acrobat»), including the generated military rows.
+# A Persian «آچار» can never match any of them, so offering the field would report a
+# permanent 0% and make the analysis text say the person lacks every tool they listed.
+# It stays in the suggestion form (all ten columns do) and in `_combined_text`, where
+# the dense channel still reads it. Translating that column is what would let this list
+# grow by one line.
+PROFILE_FIELDS = ["skills", "knowledge", "abilities", "responsibilities",
+                  "work_context", "career_path_next"]
+
+# What a profile must carry before it is worth ranking 1116 records against. `skills`
+# because it is the column that most decides what an occupation *is* — tools and
+# knowledge follow from it, and a profile of tools alone matches every job that happens
+# to use a computer. The counts live in `config.py`, with the rest of the tuning.
+PROFILE_REQUIRED = ["skills"]
+
+# The columns the analysis is written from, flagged `primary` in the detail boxes. The
+# whole profile is the question here, so the fields the user actually filled in are the
+# ones to open — decided per request in `engine.analyze`, unlike DISCOVERY_PRIMARY.
+PROFILE_LABELS = {f: FIELD_LABELS[f] for f in PROFILE_FIELDS}
