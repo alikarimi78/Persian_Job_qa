@@ -47,6 +47,7 @@ from app.auth import create_token, hash_password
 from app.database import Base, get_db
 from app.models import Organization, Role, Unit, User
 from app.routers import accounts as accounts_router
+from app.routers import admin as admin_router
 from app.routers import auth as auth_router
 from app.routers import orgs as orgs_router
 from app.routers import reports as reports_router
@@ -141,6 +142,10 @@ def app(db) -> FastAPI:
     api.include_router(units_router.router)
     api.include_router(stats_router.router)
     api.include_router(reports_router.router)
+    # The moderation queue reaches `engine_manager` for the rebuild endpoints, which is
+    # exactly what the stubbed `job_qa_service` at the top of this file is for — the
+    # suggestion tests never touch the engine itself.
+    api.include_router(admin_router.router)
     api.dependency_overrides[get_db] = lambda: db
     return api
 

@@ -29,6 +29,30 @@ def _review(job_id: int, new_status: JobStatus, admin: User, db: Session) -> Job
     return record
 
 
+@router.put("/suggestions/{job_id}", response_model=JobOut)
+def edit_suggestion(job_id: int, body: JobIn, db: Session = Depends(get_db)):
+    """An admin corrects a pending suggestion before deciding on it.
+
+    The whole record is sent, not a patch: the reviewer edits the same ten-column form
+    the suggester filled in, so a partial body would only add a way for a column to go
+    missing. `JobIn` is what keeps every column filled either way.
+
+    Editing is deliberately confined to `pending`. An approved record is part of the one
+    corpus every organization searches — changing it there is a dataset edit that also
+    needs a rebuild before the search reflects it — and a rejected one is closed. Both
+    answer 409, the same way a second review does."""
+    record = db.get(JobRecord, job_id)
+    if record is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Record not found")
+    if record.status != JobStatus.pending:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"Record is already {record.status.value}")
+    for column, value in body.model_dump().items():
+        setattr(record, column, value)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
 @router.post("/suggestions/{job_id}/approve", response_model=JobOut)
 def approve(job_id: int, admin: User = Depends(require_super_admin), db: Session = Depends(get_db)):
     return _review(job_id, JobStatus.approved, admin, db)

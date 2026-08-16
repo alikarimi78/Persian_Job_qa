@@ -42,7 +42,7 @@ than loudly — a column absent from `_combined_text` is simply never embedded, 
 A column that is prose rather than a `|`-joined list also belongs in `PROSE_COLUMNS`; otherwise its box
 renders the sentence as a one-item list. If people should be able to *search* on it, it goes in
 `PROFILE_FIELDS` as well — which is three lists, not one: `job_qa_service/columns.py`, its copy in
-`app/schemas.py`, and `src/pages/Analyze.jsx`'s `FIELDS`. The copy in `app/schemas.py` exists because
+`app/schemas.py`, and `src/components/search/AdvancedSearch.jsx`'s `FIELDS`. The copy in `app/schemas.py` exists because
 `tests/conftest.py` stubs the whole engine package away, so importing the real list there would break
 the suite; a field named in one and not the others is a 422 naming a key the form has no box for.
 
@@ -89,7 +89,8 @@ must crash rather than default (`test_config.py`), the two rate limits (`test_ra
 the dashboard's counts stop where its caller's authority does (`test_stats_api.py`), what the PDF
 report puts on a page (`test_reports_api.py`), and what a profile has to carry before advanced search
 will run one (`test_advanced_search_api.py` — the contract and the gates around the ranking, never the
-ranking itself, which needs the real engine). It
+ranking itself, which needs the real engine), and who may correct a suggestion and while it is in what
+state (`test_admin_suggestions_api.py`). It
 needs neither Postgres nor torch: `tests/conftest.py` puts the required variables in `os.environ`,
 points `DATABASE_URL` at in-memory SQLite, and installs a **stub `job_qa_service`** in `sys.modules`
 before `app` is imported, because `app.routers.search` pulls the engine package in through
@@ -433,6 +434,16 @@ Users submit complete records to `POST /jobs/suggestions`, which land as `pendin
 under `/admin/*` (the whole router is gated by `dependencies=[Depends(require_super_admin)]`; `_review`
 rejects any record that is not still `pending`). `POST /admin/jobs` inserts as `approved` directly.
 
+**`PUT /admin/suggestions/{id}` is the third review action**, next to approve and reject: the reviewer
+corrects the record before deciding on it, instead of rejecting it and asking the suggester to send it
+again with one column fixed. It takes the whole `JobIn` body — the same ten-column form the suggester
+filled in, so a partial body would only add a way for a column to go missing — and it is confined to
+`pending` for the same reason `_review` is. An approved row is in the corpus every organization searches
+and its text is what the embedding store is keyed on, so editing one *there* is a dataset edit plus a
+rebuild rather than a review; a rejected one is closed. Both answer 409, as a second review does.
+`tests/test_admin_suggestions_api.py` covers it (and is why `tests/conftest.py`'s `app` fixture now
+mounts the admin router).
+
 Moderation is **super-admin-only**, including for org and unit admins: approving a suggestion writes into
 the one global corpus every organization searches, so it is not an organization-level decision. The
 tenancy scopes accounts, not job records — there is a single shared dataset.
@@ -607,22 +618,40 @@ Two things in the client are coupled to this repo:
   unsplittable cell that no search could match, on both sides of the system at once. Text pasted with a
   separator still in it is split rather than refused, and a space is deliberately not a separator —
   «حل مسئله» is one item.
-- `src/pages/Analyze.jsx` (`/analyze`, its own sidebar item) is the advanced search: the six
-  `PROFILE_FIELDS` as `ItemsInput`s, and `components/ProfileMatches.jsx` for the ranking under it. Each
+- **Searching is one section with two modes.** `src/pages/Search.jsx` (`/search`) draws a
+  `components/search/ModeSwitch` and mounts one of `components/search/QuestionSearch.jsx` (a sentence in,
+  prose out) or `components/search/AdvancedSearch.jsx` (the six `PROFILE_FIELDS` as `ItemsInput`s, with
+  `components/ProfileMatches.jsx` for the ranking). Advanced search was `/analyze` and its own sidebar
+  item until the customer asked for one search entry with the advanced mode a button beside the plain
+  one; `/analyze` now redirects to `/search?mode=advanced`, which is also where the switch keeps the
+  mode — a query parameter rather than component state, so the mode is a link someone can send. Each
   match draws its coverage bar and then every item the user typed — matched ones in green, missed ones
   struck through — because the gap is half of what makes it an analysis. It reuses `JobDetails` for the
   record itself rather than growing a second way to render a job.
-- `src/components/JobDetails.jsx` renders the `details` payload of a search result as one collapsible box
-  per field, under the generated answer. It is deliberately *not* a third copy of the column list: labels,
-  order, list-splitting and which boxes open all arrive from the backend, so a new content column shows up
-  in the boxes on its own. The only thing it decides locally is shape — duties render as a bulleted list
-  because they are sentences, other list columns as chips, prose as a paragraph.
-- The discovery confirmation spans the two services. `Search.jsx` sees `mode: job_generated`, shows the
-  offer with accept/decline buttons, and on accept stashes `job_draft` through `src/utils/draft.js` before
-  routing to `/suggest`, which prefills the editable form from it. The stash is sessionStorage rather than
-  router state so the accepted draft survives a redirect through `/login`. That detour is now rare — every
-  page including `/` is behind `Protected` since `/search` started requiring a token — but the stash still
-  earns its keep across an expired session.
+- **«/» is a redirect, not a page** (`App.jsx:Landing`, `src/routes/landing.js`): a session opens on the
+  dashboard for anyone in `ADMIN_ROLES` and on `/search` for everyone else, which is why the search page
+  moved off the root. `Login` sends the user to the same place, unless it is returning them to the page
+  an expired session interrupted.
+- `src/components/JobDetails.jsx` renders the `details` payload of a search result as one box per field,
+  under the generated answer. It is deliberately *not* a third copy of the column list: labels, order and
+  list-splitting all arrive from the backend, so a new content column shows up in the boxes on its own.
+  The only thing it decides locally is shape — duties render as a bulleted list because they are
+  sentences, other list columns as chips, prose as a paragraph. **Nothing folds**: every box was a
+  `<details>` that had to be clicked open, with only the `primary` ones open to begin with, so the answer
+  arrived under a row of closed labels and the reader had to guess which one held what they wanted. A
+  record is short enough to print whole. `primary` still comes from the backend and still means
+  something — those boxes are tinted and sorted first — but it decides *emphasis* now, not visibility.
+  The grid is `1 / 2 / 3` fixed columns with `grid-auto-flow: dense`, not an `auto-fit` track: the boxes
+  come in two widths (a chip column, and a full-width paragraph for prose and for the sentence list), and
+  dense is what stops a full-width box leaving a hole behind it.
+- **A generated job is edited where it is offered.** `QuestionSearch` sees `mode: job_generated` and
+  renders `JobForm` prefilled from `job_draft` right there, under the answer, ending in the same green
+  «ثبت پیشنهاد» that posts to `/jobs/suggestions` — plus a «نه، ممنون» that dismisses it. It used to be
+  an accept button that stashed the draft in sessionStorage (`src/utils/draft.js`) and routed to
+  `/suggest` to be edited and submitted there; the customer asked for one step fewer, so the stash and
+  its two call sites are gone and `/suggest` is the blank form it always looked like. The proposal's
+  `details` boxes are not drawn in this mode either — the editable form is already every column, and
+  showing both was the same record twice.
 
 - The **PDF report** is a «گزارش PDF» button on the result card, next to the match score, hidden for
   `out_of_domain`. It posts the result back (see *PDF reports* above), so `Search.jsx` keeps the question
@@ -788,8 +817,10 @@ change it — the generated sentences stay exactly as they were, and the boxes s
 
 - `primary` flags the columns the answer actually used — `INTENT_TO_FIELDS[intent]` on the question path,
   `DISCOVERY_PRIMARY` on the discovery path, which has no intent to key on because the user described a
-  job instead of asking about one facet of it. Those boxes are meant to be shown open, the rest folded,
-  and `job_detail` sorts them first so a client that ignores the flag still leads with the right field.
+  job instead of asking about one facet of it. Those boxes are meant to be emphasized — the client tints
+  them — and `job_detail` sorts them first so a client that ignores the flag still leads with the right
+  field. It used to mean «open this one, fold the rest»; nothing folds in the client any more, so the
+  flag is now about weight rather than about visibility.
 - `items` splits a list column on its `|`; the three `PROSE_COLUMNS` get `[]`, since there a comma is
   punctuation and the cell is one piece of text. `value` is display-ready either way — prose verbatim, a
   list re-joined with «،» — so a client that never looks at `items` still cannot render a raw `|`.
