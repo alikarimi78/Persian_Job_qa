@@ -34,8 +34,8 @@ from .models import User
 # Persian on purpose, unlike the rest of app/'s messages: the client shows a `detail` it
 # has no case for verbatim (`src/utils/errors.js`), and this one is read by the person
 # standing at the login form.
-TOO_MANY_ATTEMPTS = "تعداد تلاش‌ها بیش از حد مجاز است؛ لطفاً {seconds} ثانیه دیگر دوباره تلاش کنید."
-TOO_MANY_SEARCHES = "تعداد جستجوها بیش از حد مجاز است؛ لطفاً {seconds} ثانیه دیگر دوباره تلاش کنید."
+TOO_MANY_ATTEMPTS = "تعداد تلاش‌ها بیش از حد مجاز است؛ لطفاً {seconds} ثانیه دیگر مجدداً تلاش نمایید."
+TOO_MANY_SEARCHES = "تعداد جستجوها بیش از حد مجاز است؛ لطفاً {seconds} ثانیه دیگر مجدداً تلاش نمایید."
 
 
 class RateLimiter:

@@ -10,6 +10,17 @@ CRUD/auth/moderation layer over Postgres, with an organization → unit → user
 self-contained RAG engine, no dependency on `app/` in either direction). All user-facing strings are
 Persian.
 
+**And formal Persian.** The customer is a government body, so everything a person reads is written in
+the administrative register: the user is addressed as «شما» and never as «تو», verbs are «نمایید» /
+«وارد کنید» rather than «بزن» / «بنویس», and it is «پایگاه داده» and «مدیر سامانه» — not «دیتاست», not
+«ادمین» in prose (the *role labels* keep the customer's own «ادمین سازمان» / «ادمین واحد»). This is a
+rule about four places at once, because user-facing Persian is not confined to the client:
+`job_qa_service/messages.py` (fixed answers, shown verbatim on every template path),
+`job_qa_service/prompts.py` (the tone rule in each system prompt — every one now names «شما», so the
+*generated* prose matches the fixed text around it), `app/rate_limit.py`'s two `detail` strings, and
+`app/reports/render.py`'s notices. A new string that reads as speech rather than as a notice is the
+thing to catch in review.
+
 The dataset is O*NET data translated/summarized into Persian, flattened into **10 canonical columns**
 that recur in every layer (DB model, Pydantic schemas, engine, seed script):
 
@@ -577,6 +588,12 @@ green bar that read as a banner rather than a button. The cap is a maximum and n
 purpose: the login card is narrower than it, so that form still ends in a button the width of its inputs.
 Height and padding travel together as `Button`'s `size` prop rather than as a `className`, because
 Tailwind emits `.h-8` before `.h-10` and a smaller height passed as a class silently lost to the base one.
+
+The bar takes an optional **`actions`** slot beside the green button, for the *other* answer a form can
+have — «رد پیشنهاد» next to «ثبت پیشنهاد» on a generated record (`JobForm` passes it straight through).
+The cap moved onto a wrapper (`flex-1 min-w-48 max-w-md`) so the submit keeps exactly the width it had
+alone and a second button changes nothing about it. Declining lives *there* rather than in the notice
+above the fields, because both are decisions about the same record and are made after reading it.
 
 The sidebar is the reference's own neutral slate glass (`bg-slate-500/35`), and the navigation states in
 `layout/MenuItem.jsx` are the matching slate family. It was briefly retinted indigo to echo the
