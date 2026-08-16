@@ -47,9 +47,19 @@ def payload(**overrides):
 
 
 class Caller:
-    """Stands in for the User row the renderer reads a name off."""
-    def __init__(self, username="a.karimi"):
+    """Stands in for the User row the renderer reads a name off.
+
+    `display_name` mirrors `models.User`: the person's name if the account has one, and
+    the username for an account created before migration 0007 gave them names."""
+    def __init__(self, username="a.karimi", first_name=None, last_name=None):
         self.username = username
+        self.first_name = first_name
+        self.last_name = last_name
+
+    @property
+    def display_name(self):
+        parts = [part for part in (self.first_name, self.last_name) if part]
+        return " ".join(parts) if parts else self.username
 
 
 # ---------- the endpoint ----------
@@ -86,13 +96,32 @@ def test_every_role_may_download(as_user, world):
 
 
 # ---------- what the page says ----------
-def test_header_names_the_caller_not_the_body(as_user, world):
+def test_header_names_the_caller_not_the_body(as_user, world, db):
     """Identity comes from the token. The body has no field for it, and adding one
     would let a user issue a report over somebody else's name and unit."""
+    world.user_a1.first_name, world.user_a1.last_name = "زهرا", "کریمی"
+    db.commit()
     html = build_html(ReportIn(**payload()), world.user_a1, "org-a", "unit-a1")
 
-    assert "user-a1" in html
     assert "org-a" in html and "unit-a1" in html
+
+
+def test_the_masthead_prints_the_person_not_the_username(as_user, world, db):
+    """A report is read away from the system, where «user-a1» identifies nobody."""
+    world.user_a1.first_name, world.user_a1.last_name = "زهرا", "کریمی"
+    db.commit()
+    html = build_html(ReportIn(**payload()), world.user_a1, "org-a", "unit-a1")
+
+    assert "زهرا کریمی" in html
+    assert "user-a1" not in html
+
+
+def test_an_account_with_no_name_still_prints_as_something(world):
+    """Accounts that predate migration 0007 have neither column filled in; the masthead
+    falls back to the username rather than to a blank line."""
+    html = build_html(ReportIn(**payload()), world.user_a1, None, None)
+
+    assert "user-a1" in html
 
 
 def test_answer_and_every_field_reach_the_page():

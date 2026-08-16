@@ -150,7 +150,10 @@ def build_html(report, user, organization: str | None, unit: str | None,
         subtitle=SUBTITLE,
         colophon=COLOPHON,
         issued_at=format_datetime(moment),
-        username=user.username,
+        # The person, not the credential: a report is read away from the system, where
+        # «a.karimi» names nobody. `display_name` falls back to the username for an
+        # account created before migration 0007 gave accounts a name at all.
+        person=user.display_name,
         organization=organization,
         unit=unit,
         question=report.question,

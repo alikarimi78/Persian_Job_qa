@@ -100,8 +100,10 @@ must crash rather than default (`test_config.py`), the two rate limits (`test_ra
 the dashboard's counts stop where its caller's authority does (`test_stats_api.py`), what the PDF
 report puts on a page (`test_reports_api.py`), and what a profile has to carry before advanced search
 will run one (`test_advanced_search_api.py` — the contract and the gates around the ranking, never the
-ranking itself, which needs the real engine), and who may correct a suggestion and while it is in what
-state (`test_admin_suggestions_api.py`). It
+ranking itself, which needs the real engine), who may correct a suggestion and while it is in what
+state (`test_admin_suggestions_api.py`), and that a rebuild asked for during one is queued rather than
+dropped (`test_engine_manager.py`, with `load` replaced — the only test file here that is about threads
+rather than about HTTP). It
 needs neither Postgres nor torch: `tests/conftest.py` puts the required variables in `os.environ`,
 points `DATABASE_URL` at in-memory SQLite, and installs a **stub `job_qa_service`** in `sys.modules`
 before `app` is imported, because `app.routers.search` pulls the engine package in through
@@ -232,8 +234,21 @@ There is one authoritative invariant: **the engine's corpus is exactly the `jobs
   rebuild leaves the old one in place with the error recorded in `manager.last_result`. The two engines
   overlap in memory by design, which is why the encoder is shared and the embeddings are cached per text
   rather than per corpus — see *Embedding cache*.
-- Approving a suggestion does **not** refresh the engine. A new record only becomes searchable after an
-  explicit rebuild (or a restart).
+- **Approving a suggestion starts a rebuild** (`routers/admin.py:approve`, and `create_job` for the same
+  reason — both insert an approved row). It used to require a second, explicit decision, and an admin
+  who forgot it left a record approved but unfindable. Nothing is awaited: the handler answers as soon as
+  the row is committed, `rebuild_async` runs on its thread, and the same `/admin/rebuild/status` the
+  button uses reports the run. The call sits **after** `_review` has committed, because the rebuild reads
+  the approved rows through a session of its own and would miss a row still open in the request's.
+- A rebuild requested while one is running is **queued, not dropped** (`_rerun` / `_rerun_force`). That
+  matters only because approving is now a trigger: a queue is moderated one click after another, the pass
+  in flight read the database before the second row was committed, and a dropped request would leave that
+  record out of the corpus until somebody pressed the button. Any number of clicks collapse into one
+  queued pass, and a `force_embeddings` arriving during an ordinary rebuild is not downgraded. Clearing
+  `_rebuilding` and reading `_rerun` happen under one lock — a request slipping between the two would
+  find no rebuild running and start none, having just been told one was. `rebuild_async` still returns
+  `False` for "not started now"; the approve handler ignores it, since the queued pass covers its record.
+  `tests/test_engine_manager.py` pins all of this with `load` replaced — nothing there builds an engine.
 - `/search` wraps `engine.answer` in `run_in_threadpool` — encoding and the LLM call are blocking.
 
 ### Roles and tenancy
@@ -256,7 +271,7 @@ POST /accounts/org-admins     super_admin                      one per organizat
 POST /accounts/unit-admins    super_admin | org_admin          one per unit
 POST /accounts/users          super_admin | unit_admin
 GET  /accounts                super_admin | org_admin | unit_admin   scoped, ?role=&unit_id=&organization_id=
-POST   /accounts/{id}/block · /unblock · /password     any admin, over accounts below them
+POST   /accounts/{id}/block · /unblock · /password · /name   any admin, over accounts below them
 POST   /accounts/{id}/unit    super_admin | org_admin  move an account to another unit
 POST   /accounts/{id}/organization   super_admin       move an organization's admin to another one
 DELETE /accounts/{id}         any admin, over accounts below them
@@ -268,6 +283,7 @@ POST /units · GET /units · GET /units/{id} · PATCH /units/{id} · DELETE /uni
                                                  (a unit_admin only *reads* its own unit)
 GET  /auth/me                 any account: role plus the organization/unit it sits in
 POST /auth/password           any account: its own password, against the current one
+POST /auth/name               any account: its own first/last name (no password — a name is not one)
 GET  /stats                   super_admin | org_admin | unit_admin   dashboard counts, scoped as /accounts
 POST /reports/search          any account: an answer it already has, printed as a PDF
 POST /search · /search/advanced    any account: a question, or a profile ranked against the corpus
@@ -387,8 +403,22 @@ migration `0006` from the customer's `admin_panel.mp4` («شناسه سازما�
   declared mime against the file's own magic bytes and refuses SVG outright: the type decides how the
   bytes are served back to a browser, so believing it would make this field stored XSS.
 
-Not implemented, and absent on purpose rather than forgotten: renaming an *account* — login is by username,
-so the name is the credential.
+**An account is a person as well as a credential** (migration `0007`): `first_name` / `last_name` beside
+`username`. The reason is outside the system — `POST /reports/search` prints a PDF that is read away from
+it, and «a.karimi» in the masthead identifies nobody. Three things about it are deliberate:
+
+- **The columns are nullable, but `AccountIn` requires both.** Same split as the organization profile: the
+  accounts that predate the migration have no name and a NOT NULL would have meant inventing one, while
+  nothing created *through the API* is allowed to be anonymous. `User.display_name` is the seam — the name
+  if there is one, the username if there is not — so a legacy account still prints as something.
+- **`POST /accounts/{id}/name`** fills one in, under exactly the authority every other action on somebody
+  else's account takes (`assert_can_manage_account`), and **`POST /auth/name`** is the caller's own. The
+  second is not a convenience: it is the same gap `/auth/password` fills, and the seeded first super_admin
+  — created from two environment variables carrying no name — is precisely the account that needs it. It
+  asks for no password, unlike `/auth/password`, because a name is not a credential: it cannot be used to
+  sign in, to reach anything, or to take an account over.
+- **Renaming the *username* is still absent on purpose.** Login is by username, so that one *is* the
+  credential; these two columns are only what the person is called.
 
 **The two password endpoints are not variants of each other.** `POST /accounts/{id}/password` is an admin
 setting somebody else's, and deliberately does not ask for the old one: it exists precisely for the account
@@ -444,6 +474,9 @@ whole point of having the switch. `RATE_LIMIT_ENABLED` and the four count/window
 Users submit complete records to `POST /jobs/suggestions`, which land as `pending`. They are reviewed
 under `/admin/*` (the whole router is gated by `dependencies=[Depends(require_super_admin)]`; `_review`
 rejects any record that is not still `pending`). `POST /admin/jobs` inserts as `approved` directly.
+**Both of the paths that produce an approved row — approving and adding directly — also start the engine
+rebuild**; see *The corpus is the approved DB rows* for what that costs and why the second request is
+queued rather than refused. Rejecting and editing do not: neither changes what a search can reach.
 
 **`PUT /admin/suggestions/{id}` is the third review action**, next to approve and reject: the reviewer
 corrects the record before deciding on it, instead of rejecting it and asking the suggester to send it
@@ -525,7 +558,8 @@ ranking is a different document. That is the obvious next thing to add if anyone
 
 ### PDF reports (`app/reports/`)
 
-`POST /reports/search` prints a search answer as an A4 report: masthead, who issued it and when, the
+`POST /reports/search` prints a search answer as an A4 report: masthead, who issued it (the person's
+name — `User.display_name`, falling back to the username for an account that has none) and when, the
 question, the generated prose, then **every** column of the matched record — including the boxes the
 user left folded, because a report is read away from the system that produced it.
 
@@ -614,15 +648,18 @@ company to build the reference's profile links from. The reference's desktop dro
 `right-0`, which in RTL hangs it off the side of the page — it is anchored `left-0` here, as the
 reference's own mobile header already does.
 
-Under that summary the dropdown carries the two things an account does to *itself*: «تغییر رمز» and
-«خروج از حساب», as `layout/UserMenu.jsx:AccountActions` — one copy for both header modes, which is the
+Under that summary the dropdown carries the things an account does to *itself*: «ویرایش نام»,
+«تغییر رمز» and «خروج از حساب», as `layout/UserMenu.jsx:AccountActions` — one copy for both header modes, which is the
 fix for the pair having been written out twice in `DesktopMode`/`MobileMode` and drifting the moment
-there was a second action. The dialog is `SelfPasswordDialog` and is owned by `Header` rather than by
-either mode, so one of it exists whichever mode is drawn and it survives the breakpoint. This is the
-only route to a password change for an ordinary user and for an org_admin — `/manage/accounts` is
-admin-only, and an org_admin does not appear in its own listing there (`visible_users` reaches accounts
-through their unit, and an org_admin has none). Opening it closes the dropdown: the panel is not modal
-and would otherwise still be hanging open behind the dialog afterwards.
+there was a second action. The dialogs are `SelfPasswordDialog` and `PersonNameDialog`, both owned by
+`Header` rather than by either mode, so one of each exists whichever mode is drawn and they survive the
+breakpoint. This is the only route to either for an ordinary user and for an org_admin —
+`/manage/accounts` is admin-only, and an org_admin does not appear in its own listing there
+(`visible_users` reaches accounts through their unit, and an org_admin has none). Opening one closes the
+dropdown: the panel is not modal and would otherwise still be hanging open behind the dialog afterwards.
+The summary above them leads with the person's name and keeps the username under it, and `Header` writes
+`/auth/me` back into the persisted session on every render — the panel reads the session, so without that
+a name changed in the dialog would still show the old one until the next login.
 
 Two things in the client are coupled to this repo:
 
@@ -721,17 +758,24 @@ Two things in the client are coupled to this repo:
   - `RowActions` is `justify-end`, which under `dir="rtl"` anchors the group at the **left**, so delete is
     written last everywhere and keeps its position whatever else a row does or does not offer. Reading
     right to left the buttons come out edit, view, delete — the reference's own order.
-  - `src/components/AccountsTable.jsx` carries the row actions — block/unblock, reset password, move,
-    delete — each now a dialog rather than an inline panel. «ویرایش» on an account is *where it sits* and
-    nothing else: a role decides which scope column the row carries, and a username is the credential you
-    log in with, so neither has an endpoint. That makes the pencil **one dialog over two endpoints**,
-    branching on the row's own scope column (`movingOrganization`): an org_admin picks an organization,
-    everyone else a unit. It repeats the backend's rules in `canManage()`, `canMove()` and
-    `canMoveOrganization()` purely so the table does not offer a button that would come back 403; the
-    server is still the one enforcing them, and the pairs must be changed together.
-  - The caller's **own row** carries one action of its own — the key, opening `SelfPasswordDialog`
-    (current password + new, `POST /auth/password`). Every other button is hidden there because nobody may
-    act on their own account, which is exactly why this one cannot reuse the admin reset. The same dialog
+  - `src/components/AccountsTable.jsx` carries the row actions — block/unblock, reset password, edit,
+    delete — each now a dialog rather than an inline panel. Its first column is the **person's name**
+    («—» for an account created before migration 0007), with the username beside it as the credential.
+    «ویرایش» is that name, plus *where the account sits* when the caller may move it — a role decides
+    which scope column the row carries and a username is the credential you log in with, so neither of
+    those has an endpoint at all. That makes the pencil **one dialog over as many as three endpoints**,
+    and `pages/manage/Accounts.jsx:saveAccount` is where they are spent: the name first, then the move,
+    stopping at the first failure with the server's own message and closing only when both went through.
+    Which move is offered branches on the row's own scope column (`movingOrganization`) — an org_admin
+    picks an organization, everyone else a unit — and the destination is simply absent for a row the
+    caller may rename but not move (a unit_admin over their own users). It repeats the backend's rules in
+    `canManage()`, `canMove()` and `canMoveOrganization()` purely so the table does not offer a button
+    that would come back 403; the server is still the one enforcing them, and the pairs must be changed
+    together.
+  - The caller's **own row** carries two actions of its own — the key, opening `SelfPasswordDialog`
+    (current password + new, `POST /auth/password`), and the pencil, which on that row edits only the name
+    and goes to `POST /auth/name`. Every other button is hidden there because nobody may act on their own
+    account, which is exactly why neither of these can reuse the admin endpoint. The same dialog
     hangs off the header dropdown for everybody (see *The client is a sibling repo* above); it is
     duplicated here because this is the page an admin is already on when they think about accounts, and a
     super_admin's own row is the one the thought usually starts from.

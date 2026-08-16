@@ -120,6 +120,13 @@ class User(Base):
     # Global, not per-tenant: login is by username alone, so it has to identify one row
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(128))
+    # The person behind the account, as against the credential above. Both are nullable
+    # for the same reason `unit_id` is: every row that predates migration 0007 has no
+    # name, and a NOT NULL would have meant inventing one. New accounts always carry
+    # both — `AccountIn` requires them — so the slack is for legacy rows only, and
+    # `display_name` is what keeps a nameless one printable.
+    first_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     role: Mapped[Role] = mapped_column(Enum(Role), default=Role.user)
     # Blocked accounts keep everything they own (suggestions, their place in a unit) and
     # simply cannot authenticate. Checked on login *and* on every request, so an already
@@ -135,6 +142,20 @@ class User(Base):
 
     organization: Mapped[Organization | None] = relationship()
     unit: Mapped[Unit | None] = relationship()
+
+    @property
+    def full_name(self) -> str | None:
+        """«علی کریمی», or None for an account that has no name recorded."""
+        parts = [part for part in (self.first_name, self.last_name) if part]
+        return " ".join(parts) if parts else None
+
+    @property
+    def display_name(self) -> str:
+        """What a document should print for this account — the person's name, falling
+        back to the username. The PDF report's masthead is the reason this exists: a
+        report is read away from the system, where «a.karimi» identifies nobody, but a
+        legacy account still has to print as *something*."""
+        return self.full_name or self.username
 
     @property
     def scope_organization_id(self) -> int | None:

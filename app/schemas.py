@@ -148,10 +148,35 @@ class RenameIn(BaseModel):
 
 
 # ---------- accounts ----------
-class AccountIn(BaseModel):
-    """Credentials for an account someone else is creating. There is no self-service
-    registration: the scope (which organization or unit) comes from the endpoint and
-    the caller, never from the person being created."""
+class NameIn(BaseModel):
+    """`POST /accounts/{id}/name` and `POST /auth/name`. Both parts together, never one
+    at a time: a half-changed name is not a correction anyone asked for, and the pair is
+    what the PDF prints."""
+    first_name: str = Field(min_length=1, max_length=64)
+    last_name: str = Field(min_length=1, max_length=64)
+
+    @field_validator("first_name", "last_name")
+    @classmethod
+    def _clean(cls, value: str) -> str:
+        """Trimmed, and refused if the trim leaves nothing: « » passes `min_length` and
+        would print as a blank in the report's masthead."""
+        value = value.strip()
+        if not value:
+            raise ValueError("Name cannot be blank")
+        return value
+
+
+class AccountIn(NameIn):
+    """Credentials for an account someone else is creating, plus who the account *is*.
+    There is no self-service registration: the scope (which organization or unit) comes
+    from the endpoint and the caller, never from the person being created.
+
+    The name is required here even though the columns are nullable (migration 0007).
+    That split is deliberate and is the same one the organization profile makes: the
+    rows that predate the column have to be allowed to have no name, while nothing
+    created *through the API* is allowed to be anonymous — a report has to be able to
+    name the person who issued it.
+    """
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=8, max_length=128)
 
@@ -205,6 +230,12 @@ class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     username: str
+    # Null only for an account created before migration 0007. `full_name` is the model's
+    # own property, carried here so a client never has to decide how to join the two —
+    # and so the one place that decides it is the same one the PDF reads.
+    first_name: str | None = None
+    last_name: str | None = None
+    full_name: str | None = None
     role: str
     is_active: bool = True
     # As stored: an org_admin carries organization_id, everyone below carries unit_id.

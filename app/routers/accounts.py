@@ -18,11 +18,11 @@ from sqlalchemy.orm import Session
 from ..accounts import (assert_can_manage_account, assert_manages_organization,
                         assert_manages_unit, create_account, delete_account, get_account,
                         get_organization, get_unit, move_to_organization, move_to_unit,
-                        set_active, set_password, visible_users)
+                        set_active, set_name, set_password, visible_users)
 from ..auth import require_roles, require_super_admin
 from ..database import get_db
 from ..models import Role, Unit, User
-from ..schemas import (AccountIn, MoveOrganizationIn, MoveUnitIn, OrgAdminIn,
+from ..schemas import (AccountIn, MoveOrganizationIn, MoveUnitIn, NameIn, OrgAdminIn,
                        PasswordResetIn, UnitAdminIn, UserAccountIn, UserOut)
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
@@ -34,6 +34,7 @@ def create_super_admin(body: AccountIn, db: Session = Depends(get_db)):
     """A super_admin is made only by another super_admin; the first one comes from
     ADMIN_USERNAME/ADMIN_PASSWORD in `scripts/seed_from_xlsx.py`."""
     return create_account(db, username=body.username, password=body.password,
+                          first_name=body.first_name, last_name=body.last_name,
                           role=Role.super_admin)
 
 
@@ -42,6 +43,7 @@ def create_super_admin(body: AccountIn, db: Session = Depends(get_db)):
 def create_org_admin(body: OrgAdminIn, db: Session = Depends(get_db)):
     get_organization(db, body.organization_id)
     return create_account(db, username=body.username, password=body.password,
+                          first_name=body.first_name, last_name=body.last_name,
                           role=Role.org_admin, organization_id=body.organization_id)
 
 
@@ -52,6 +54,7 @@ def create_unit_admin(body: UnitAdminIn,
     unit = get_unit(db, body.unit_id)
     assert_manages_organization(actor, unit.organization_id)
     return create_account(db, username=body.username, password=body.password,
+                          first_name=body.first_name, last_name=body.last_name,
                           role=Role.unit_admin, unit_id=unit.id)
 
 
@@ -70,6 +73,7 @@ def create_user(body: UserAccountIn,
     unit = get_unit(db, unit_id)
     assert_manages_unit(actor, unit)
     return create_account(db, username=body.username, password=body.password,
+                          first_name=body.first_name, last_name=body.last_name,
                           role=Role.user, unit_id=unit.id)
 
 
@@ -103,6 +107,22 @@ def reset_password(user_id: int, body: PasswordResetIn, actor: User = Depends(_a
     target = get_account(db, user_id)
     assert_can_manage_account(actor, target)
     return set_password(db, target, body.password)
+
+
+@router.post("/{user_id}/name", response_model=UserOut)
+def rename_account(user_id: int, body: NameIn, actor: User = Depends(_any_admin),
+                   db: Session = Depends(get_db)):
+    """Corrects the *person's* name on an account below the caller — a typo, a changed
+    surname, or the name an account created before migration 0007 never had.
+
+    Not a rename of the account itself: `username` is the credential and stays what it
+    is, so nothing about logging in or about who owns which suggestion changes here.
+    Same authority as every other action on somebody else's account, and the same rule
+    that nobody may act on their own — `POST /auth/name` is that one.
+    """
+    target = get_account(db, user_id)
+    assert_can_manage_account(actor, target)
+    return set_name(db, target, body.first_name, body.last_name)
 
 
 @router.post("/{user_id}/unit", response_model=UserOut)

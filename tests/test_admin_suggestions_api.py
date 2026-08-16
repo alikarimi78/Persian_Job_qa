@@ -10,6 +10,7 @@ changing it there is a dataset edit (and a rebuild), not a review.
 
 import pytest
 
+from app.engine_manager import manager
 from app.models import JobRecord, JobStatus
 
 COLUMNS = {
@@ -33,6 +34,16 @@ def pending(db, world) -> JobRecord:
     db.commit()
     db.refresh(record)
     return record
+
+
+@pytest.fixture
+def rebuilds(monkeypatch) -> list:
+    """Records what the handlers asked the engine manager for, without starting a thread
+    that would try to build a real engine from a database this suite does not have."""
+    calls = []
+    monkeypatch.setattr(manager, "rebuild_async",
+                        lambda force_embeddings=False: calls.append(force_embeddings) or True)
+    return calls
 
 
 def edited(**overrides) -> dict:
@@ -77,6 +88,36 @@ def test_a_reviewed_record_is_closed_to_editing(as_user, world, pending, db):
                                    json=edited(job_title="عنوان دیگر"))
     assert response.status_code == 409
     assert "approved" in response.json()["detail"]
+
+
+def test_approving_starts_a_rebuild(as_user, world, pending, rebuilds):
+    response = as_user(world.root)("POST", f"/admin/suggestions/{pending.id}/approve")
+
+    assert response.status_code == 200
+    # Not forced: the embedding store is keyed on each record's text, so this encodes the
+    # two texts of the new record and reuses the rest.
+    assert rebuilds == [False]
+
+
+def test_adding_a_record_directly_starts_a_rebuild(as_user, world, rebuilds):
+    response = as_user(world.root)("POST", "/admin/jobs", json=edited(job_title="راننده لجستیک"))
+
+    assert response.status_code == 201
+    assert rebuilds == [False]
+
+
+@pytest.mark.parametrize("route,expected", [("reject", 200), ("approve", 200)])
+def test_only_approval_touches_the_corpus(as_user, world, pending, rebuilds, route, expected):
+    response = as_user(world.root)("POST", f"/admin/suggestions/{pending.id}/{route}")
+
+    assert response.status_code == expected
+    # Rejecting changes nothing a search can reach, so it must not spend a rebuild.
+    assert rebuilds == ([] if route == "reject" else [False])
+
+
+def test_editing_does_not_start_a_rebuild(as_user, world, pending, rebuilds):
+    as_user(world.root)("PUT", f"/admin/suggestions/{pending.id}", json=edited(job_title="عنوان دیگر"))
+    assert rebuilds == []
 
 
 def test_missing_record_is_404(as_user, world):

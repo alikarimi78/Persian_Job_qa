@@ -55,7 +55,17 @@ def edit_suggestion(job_id: int, body: JobIn, db: Session = Depends(get_db)):
 
 @router.post("/suggestions/{job_id}/approve", response_model=JobOut)
 def approve(job_id: int, admin: User = Depends(require_super_admin), db: Session = Depends(get_db)):
-    return _review(job_id, JobStatus.approved, admin, db)
+    """Approving also **starts the rebuild**, so the record is searchable without a second
+    decision. It is fired after `_review` has committed — the rebuild reads the approved
+    rows through a session of its own, and would miss a row still sitting in this one.
+
+    Nothing is awaited: `rebuild_async` swaps the new engine in on a daemon thread while
+    the old one keeps serving, and its progress is reported by `/admin/rebuild/status`
+    exactly as it is for the button. A `False` here means a rebuild was already running
+    and this one is queued behind it, which is not an error to report."""
+    record = _review(job_id, JobStatus.approved, admin, db)
+    manager.rebuild_async()
+    return record
 
 
 @router.post("/suggestions/{job_id}/reject", response_model=JobOut)
@@ -65,12 +75,15 @@ def reject(job_id: int, admin: User = Depends(require_super_admin), db: Session 
 
 @router.post("/jobs", response_model=JobOut, status_code=201)
 def create_job(body: JobIn, admin: User = Depends(require_super_admin), db: Session = Depends(get_db)):
-    """A super_admin adds a record directly; it is approved immediately."""
+    """A super_admin adds a record directly; it is approved immediately — and rebuilt
+    immediately, for the same reason approving a suggestion is: this inserts an approved
+    row, and an approved row nobody can find is the same problem either way."""
     record = JobRecord(**body.model_dump(), status=JobStatus.approved,
                        suggested_by=admin.id, reviewed_by=admin.id)
     db.add(record)
     db.commit()
     db.refresh(record)
+    manager.rebuild_async()
     return record
 
 

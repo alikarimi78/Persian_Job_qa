@@ -158,7 +158,19 @@ def set_password(db: Session, target: User, password: str) -> User:
     return target
 
 
+def set_name(db: Session, target: User, first_name: str, last_name: str) -> User:
+    """The one thing about an account that can be corrected without moving it. A username
+    is the credential and never changes; a name is only what the person is called, which
+    is why this needs no more authority than editing the account already takes."""
+    target.first_name = first_name
+    target.last_name = last_name
+    db.commit()
+    db.refresh(target)
+    return target
+
+
 def create_account(db: Session, *, username: str, password: str, role: Role,
+                   first_name: str | None = None, last_name: str | None = None,
                    organization_id: int | None = None, unit_id: int | None = None) -> User:
     """Creates one account of any role, with the invariants the database also enforces.
 
@@ -182,7 +194,12 @@ def create_account(db: Session, *, username: str, password: str, role: Role,
             raise HTTPException(status.HTTP_409_CONFLICT,
                                 f"Unit already has an admin ({taken.username})")
 
+    # The name is optional *here* and required by `AccountIn`: this helper is also what
+    # `scripts/seed_from_xlsx.py`-shaped callers reach for, and the first super_admin is
+    # created from two environment variables that carry no name. It fills its own in
+    # through `POST /auth/name`.
     user = User(username=username, hashed_password=hash_password(password), role=role,
+                first_name=first_name, last_name=last_name,
                 organization_id=organization_id, unit_id=unit_id)
     db.add(user)
     db.commit()

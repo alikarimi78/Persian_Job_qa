@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from ..accounts import set_password
+from ..accounts import set_name, set_password
 from ..auth import create_token, get_current_user, verify_password
 from ..database import get_db
 from ..models import User
 from ..rate_limit import login_key, login_limiter
-from ..schemas import LoginIn, MeOut, SelfPasswordIn, TokenOut, UserOut
+from ..schemas import LoginIn, MeOut, NameIn, SelfPasswordIn, TokenOut, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -66,11 +66,30 @@ def change_own_password(body: SelfPasswordIn, request: Request,
     return set_password(db, user, body.new_password)
 
 
+@router.post("/name", response_model=UserOut)
+def change_own_name(body: NameIn, user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """The caller's own name. Deliberately does *not* ask for a password, unlike
+    `/auth/password`: a display name is not a credential — it cannot be used to sign in,
+    to reach anything, or to take an account over — so the token the caller already
+    holds is proof enough.
+
+    It exists for the same reason the self-service password endpoint does: an admin can
+    fix the name on any account below them, and a super_admin has nobody above them. The
+    first super_admin in particular is created by the seed script from two environment
+    variables that carry no name at all, so without this the top of the hierarchy would
+    be the one account whose reports could never be headed by a person.
+    """
+    return set_name(db, user, body.first_name, body.last_name)
+
+
 @router.get("/me", response_model=MeOut)
 def me(user: User = Depends(get_current_user)):
     """Who the caller is and where they sit. `organization` is resolved through the
     unit for a unit_admin or user, whose organization_id column is NULL by design."""
     organization = user.organization or (user.unit.organization if user.unit else None)
     return MeOut(id=user.id, username=user.username, role=user.role.value,
+                 first_name=user.first_name, last_name=user.last_name,
+                 full_name=user.full_name,
                  organization_id=user.organization_id, unit_id=user.unit_id,
                  organization=organization, unit=user.unit)
