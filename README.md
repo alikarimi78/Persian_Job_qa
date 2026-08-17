@@ -1,6 +1,6 @@
-# Persian Occupation Q&A — FastAPI backend
+# Persian Occupation Analysing — FastAPI backend
 
-A Persian-language Q&A service over an occupation dataset (O*NET, translated and
+A Persian-language Analysing service over an occupation dataset (O*NET, translated and
 summarized). Ask it about a job and it answers from the record; describe a job you want
 and it either finds the closest one or drafts a new record for an admin to approve.
 
