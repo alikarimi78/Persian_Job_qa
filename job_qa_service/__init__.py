@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Persian Occupation Q&A engine (RAG) — production backend package.
+Persian Occupation Analysing engine (RAG) — production backend package.
 
 Pipeline: hybrid dense retrieval (full-text + title/alias embeddings, BAAI/bge-m3)
 fused with BM25 via Reciprocal Rank Fusion -> dual-gate out-of-domain check ->

@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
     disconnect()
 
 
-app = FastAPI(title="Persian Occupation Q&A API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Persian Occupation Analysing API", version="1.0.0", lifespan=lifespan)
 
 app.include_router(auth.router)
 app.include_router(search.router)
