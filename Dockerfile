@@ -30,14 +30,29 @@ ENV PIP_RETRIES=10 \
 # the dependencies → the application. The application is what changes every build, so it
 # is last and costs seconds.
 
-# libpango/libcairo are WeasyPrint's rendering back end (app/reports): it is Pango that
+# libpango/libcairo are WeasyPrint's rendering back end (src/reports): it is Pango that
 # shapes Persian and orders the right-to-left runs, which is the whole reason the PDF is
 # built from HTML here rather than drawn. Without them the import itself fails, so the
 # API would not start at all — this is not an optional extra. The report's font is
-# shipped in app/reports/assets and loaded by path, so no fonts package is needed.
+# shipped in src/reports/assets and loaded by path, so no fonts package is needed.
+#
+# `nodejs` and `npm` are Prisma's. The schema parser, the migration engine and the
+# generator are the upstream Prisma CLI, which is a Node program — `prisma generate` and
+# `migrate deploy` both shell out to it. `node` is therefore a build *and* run dependency:
+# migrations are applied by this container's CMD, not baked into the image. Nothing the
+# application imports touches Node.
+#
+# **`npm` is a separate Debian package** and is not optional here: the `prisma` wheel does
+# not vendor the Node CLI, it `npm install`s it into ~/.cache/prisma-python on first use.
+# The `prisma generate` below is what triggers that, so the CLI lands in an image layer
+# instead of being fetched when the container starts.
+#
+# Both come from Debian rather than through `nodeenv`, which is what the wheel downloads
+# when it finds no global node (`PRISMA_USE_GLOBAL_NODE` defaults on).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libfribidi0 \
         libcairo2 libgdk-pixbuf-2.0-0 \
+        nodejs npm \
         vim iputils-ping curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -76,13 +91,38 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     pip install -r requirements.txt
 
-COPY alembic.ini ./
+# The schema comes before the application code and on its own, because `prisma generate`
+# writes the client *into the installed package* and only re-runs when the schema
+# changes — putting it below `COPY src` would regenerate on every code edit, and putting
+# it above `requirements.txt` would not have the `prisma` package to generate with.
+#
+# `prisma py fetch` downloads the query engine here rather than leaving it to first use,
+# which would make *container start* depend on binaries.prisma.sh being reachable — a
+# network call at boot, in an image whose whole point is being self-contained. It lands
+# in /root/.cache/prisma-python, and deliberately not behind a cache mount: a cache mount
+# is not a layer, so the binaries would not be in the image at all.
+#
+# `prisma generate` writes the client into the installed `prisma` package, which is why
+# `from prisma import Prisma` resolves at runtime with no generate step of its own. It is
+# also what installs the Node CLI into the same cache directory — see the npm note above.
+COPY prisma ./prisma
+RUN prisma py fetch \
+ && prisma generate --schema=prisma/schema.prisma
+
 COPY job_qa_service ./job_qa_service
-COPY alembic ./alembic
-COPY app ./app
+COPY src ./src
 COPY scripts ./scripts
+COPY main.py ./
 COPY Merged_Occupations.xlsx ./
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "alembic upgrade head && python -m scripts.seed_from_xlsx Merged_Occupations.xlsx && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# `scripts.prisma_cli` rather than a bare `prisma migrate deploy`: the CLI reads
+# DATABASE_URL out of the environment, and compose's env_file carries the five
+# POSTGRES_*/DATABASE_* parts instead — `src/config.py` is what assembles and exports
+# them. Everything after that is the ordinary Prisma migration flow.
+#
+# `migrate deploy` applies whatever in `prisma/migrations/` has not run yet and never
+# generates anything, which is what makes it the deployment command; `migrate dev` is for
+# a developer's machine and would try to reset a database it found drifted.
+CMD ["sh", "-c", "python -m scripts.prisma_cli migrate deploy && python -m scripts.seed_from_xlsx Merged_Occupations.xlsx && uvicorn main:app --host 0.0.0.0 --port 8000"]

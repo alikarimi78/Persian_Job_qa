@@ -15,9 +15,9 @@ That is the same requirement the container has (see the Dockerfile).
 
 import pytest
 
-from app.reports import build_html, filename, printable, render_pdf
-from app.reports.jalali import fa_digits, format_datetime, to_jalali
-from app.schemas import ReportIn
+from src.reports import build_html, filename, printable, render_pdf
+from src.reports.jalali import fa_digits, format_datetime, to_jalali
+from src.schemas import ReportIn
 from datetime import datetime, timezone
 
 
@@ -49,17 +49,12 @@ def payload(**overrides):
 class Caller:
     """Stands in for the User row the renderer reads a name off.
 
-    `display_name` mirrors `models.User`: the person's name if the account has one, and
-    the username for an account created before migration 0007 gave them names."""
+    Three attributes are all `models.display_name` reads, so this needs no database
+    row — which is the point: what these tests are about is the page, not the account."""
     def __init__(self, username="a.karimi", first_name=None, last_name=None):
         self.username = username
         self.first_name = first_name
         self.last_name = last_name
-
-    @property
-    def display_name(self):
-        parts = [part for part in (self.first_name, self.last_name) if part]
-        return " ".join(parts) if parts else self.username
 
 
 # ---------- the endpoint ----------
@@ -82,8 +77,7 @@ def test_report_requires_a_token(client):
 
 
 def test_blocked_account_cannot_download(as_user, world, db):
-    world.user_a1.is_active = False
-    db.commit()
+    db.user.update(where={"id": world.user_a1.id}, data={"is_active": False})
     assert as_user(world.user_a1)("POST", "/reports/search",
                                   json=payload()).status_code == 403
 
@@ -99,18 +93,18 @@ def test_every_role_may_download(as_user, world):
 def test_header_names_the_caller_not_the_body(as_user, world, db):
     """Identity comes from the token. The body has no field for it, and adding one
     would let a user issue a report over somebody else's name and unit."""
-    world.user_a1.first_name, world.user_a1.last_name = "زهرا", "کریمی"
-    db.commit()
-    html = build_html(ReportIn(**payload()), world.user_a1, "org-a", "unit-a1")
+    named = db.user.update(where={"id": world.user_a1.id},
+                           data={"first_name": "زهرا", "last_name": "کریمی"})
+    html = build_html(ReportIn(**payload()), named, "org-a", "unit-a1")
 
     assert "org-a" in html and "unit-a1" in html
 
 
 def test_the_masthead_prints_the_person_not_the_username(as_user, world, db):
     """A report is read away from the system, where «user-a1» identifies nobody."""
-    world.user_a1.first_name, world.user_a1.last_name = "زهرا", "کریمی"
-    db.commit()
-    html = build_html(ReportIn(**payload()), world.user_a1, "org-a", "unit-a1")
+    named = db.user.update(where={"id": world.user_a1.id},
+                           data={"first_name": "زهرا", "last_name": "کریمی"})
+    html = build_html(ReportIn(**payload()), named, "org-a", "unit-a1")
 
     assert "زهرا کریمی" in html
     assert "user-a1" not in html

@@ -8,7 +8,9 @@ Two halves, with no import between them in either direction:
 
 | | |
 |---|---|
-| `app/` | FastAPI: auth, the organization → unit → user hierarchy, job moderation, `/search` |
+| `main.py` | the entry point — `uvicorn main:app` |
+| `src/` | FastAPI: auth, the organization → unit → user hierarchy, job moderation, `/search` |
+| `prisma/` | `schema.prisma` (every table) and the migrations generated from it |
 | `job_qa_service/` | the RAG engine: retrieval (bge-m3 + BM25), intent detection, answer generation |
 
 Everything the user reads is Persian; the dataset is ten columns per record (`job_title`,
@@ -24,7 +26,7 @@ layer alone would start an API whose engine has no API key. In deployment, compo
 `env_file` puts the variables in the environment.
 
 `JWT_SECRET`, `OPENAI_API_KEY`, `ADMIN_USERNAME` and `ADMIN_PASSWORD` have **no
-defaults**. Missing or malformed, they stop the process while `app.config` is being
+defaults**. Missing or malformed, they stop the process while `src.config` is being
 imported, with a message naming each one (and printing none of their values):
 
 ```
@@ -33,12 +35,15 @@ RuntimeError: Invalid configuration — JWT_SECRET: Field required; OPENAI_API_K
 
 `DATABASE_URL` may be given whole, or assembled from `POSTGRES_USER`,
 `POSTGRES_PASSWORD`, `POSTGRES_DB`, `DATABASE_HOST` and `DATABASE_PORT`; a half-filled
-set is an error rather than a URL full of `None`.
+set is an error rather than a URL full of `None`. The scheme is plain `postgresql://` —
+Prisma parses the URL itself and refuses SQLAlchemy's old `postgresql+psycopg2://`, so a
+hand-written value carried over from before has to lose that suffix. The assembled URL is
+written back into the environment, which is what lets the `prisma` CLI find it.
 
 ## Run
 
 **Docker.** `docker-compose.yml` lives in the *deployment* repo, not here — run these
-from there. The image's `CMD` chains `alembic upgrade head`, the seed script and
+from there. The image's `CMD` chains `prisma migrate deploy`, the seed script and
 uvicorn.
 
 ```bash
@@ -56,11 +61,16 @@ builds the ~4.3 GB smaller CPU-only image.
 always as `python3 -m <tool>` — the console scripts in `venv/bin` carry a stale shebang):
 
 ```bash
-venv/bin/python3 -m uvicorn app.main:app --reload --port 8000   # Swagger at /docs
-venv/bin/python3 -m alembic upgrade head                        # apply migrations
+venv/bin/python3 -m scripts.prisma_cli generate                 # after editing schema.prisma
+venv/bin/python3 -m scripts.prisma_cli migrate deploy           # apply migrations
+venv/bin/python3 -m uvicorn main:app --reload --port 8000       # Swagger at /docs
 venv/bin/python3 -m scripts.seed_from_xlsx Merged_Occupations.xlsx
 OCCUPATIONS_PATH=Merged_Occupations.xlsx venv/bin/python3 -m job_qa_service  # engine REPL
 ```
+
+`prisma generate` writes the client **into the installed `prisma` package**, so it has to
+be re-run after a fresh `pip install` as well as after a schema change — `from prisma
+import Prisma` will not resolve otherwise.
 
 ## Tests
 
@@ -73,15 +83,22 @@ venv/bin/python3 -m pytest
 (`test_account_scope.py`, `test_accounts_api.py`, `test_tenancy_api.py`), what a token
 does and does not prove (`test_auth.py`), the settings that must crash rather than
 default (`test_config.py`), the two rate limits (`test_rate_limit.py`), and what the PDF
-report puts on a page (`test_reports_api.py`). It runs against in-memory SQLite with a
-stubbed engine, so it needs neither Postgres nor torch and finishes in seconds — but the
-report tests do need WeasyPrint's `libpango`, the same system libraries the image
-installs. The engine itself has no automated tests; the REPL above is how retrieval is
-exercised.
+report puts on a page (`test_reports_api.py`).
+
+**It needs a Postgres.** The Prisma client is generated against the provider named in
+`schema.prisma`, so the in-memory SQLite the SQLAlchemy suite used is not available — and
+the trade is a fair one, because `ck_users_scope` and the two partial unique indexes are
+now the real Postgres objects rather than a SQLite imitation of them. `conftest.py`
+derives a `<database>_test` name from `DATABASE_URL`, runs `migrate deploy` against it
+once (creating it if it does not exist) and truncates between tests; **the name must end
+in `_test`** or the suite refuses to start. Point it elsewhere with `TEST_DATABASE_URL`.
+The engine is still stubbed away, so torch is never imported — but the report tests do
+need WeasyPrint's `libpango`, the same system libraries the image installs. The engine
+itself has no automated tests; the REPL above is how retrieval is exercised.
 
 ## Architecture
 
-**The corpus is the approved database rows.** `app/engine_manager.py` reads every
+**The corpus is the approved database rows.** `src/engine_manager.py` reads every
 `jobs_info` row with `status = approved` into a DataFrame and hands it to the engine at
 startup. Nothing reads the xlsx at request time — it is a seed input only.
 `POST /admin/rebuild` builds a new engine on a background thread and swaps it in
@@ -120,7 +137,7 @@ complete records to `POST /jobs/suggestions` as `pending`, and approving one wri
 the single corpus every organization searches, which is not an organization-level
 decision.
 
-**Rate limiting** (`app/rate_limit.py`) is a sliding window kept in this process — no
+**Rate limiting** (`src/rate_limit.py`) is a sliding window kept in this process — no
 Redis, and the state is per worker. `/auth/login` is limited per source *and* username,
 and only a wrong password spends from that budget, so guessing one account runs out of
 attempts while someone who signs in correctly all day never does. `/search` is limited
@@ -131,7 +148,7 @@ shares one login budget. The header's *last* entry is the one used, since nginx 
 the address it saw to whatever the caller claimed.
 
 **PDF reports.** `POST /reports/search` turns an answer into an A4 Persian report
-(`app/reports/`): the question, the generated prose, and every column of the matched
+(`src/reports/`): the question, the generated prose, and every column of the matched
 record. The client posts back the result it is already showing rather than naming a
 question to re-run — that saves a second LLM call and guarantees the PDF matches the
 page it came from. Nothing is stored. Rendering is WeasyPrint, so the image needs
@@ -172,11 +189,39 @@ columns a second time — a column added here has to reach it too.
 
 ## Migrations
 
+The schema lives in `prisma/schema.prisma` and the migrations it produces in
+`prisma/migrations/`. `scripts/prisma_cli.py` is the CLI with `DATABASE_URL` filled in
+from settings (compose ships the five `POSTGRES_*`/`DATABASE_*` parts, not the URL) and
+the generator's executable on `PATH`.
+
 ```bash
-venv/bin/python3 -m alembic revision --autogenerate -m "describe change"   # after editing app/models.py
-venv/bin/python3 -m alembic upgrade head
+venv/bin/python3 -m scripts.prisma_cli migrate dev --name describe_change  # after editing schema.prisma
+venv/bin/python3 -m scripts.prisma_cli migrate deploy                      # apply, in deployment
+venv/bin/python3 -m scripts.prisma_cli generate                            # regenerate the client alone
 ```
 
-Migration files live in `alembic/versions/`; review autogenerated ones before applying.
-`alembic.ini`'s `sqlalchemy.url` is always overridden by `alembic/env.py`, which takes
-`settings.DATABASE_URL`.
+`migrate dev` writes the next migration *and* regenerates the client; `migrate deploy`
+only applies what has not run yet and is what the container does at start.
+
+**Read a generated migration before applying it.** Three objects in `0001_init` are
+hand-written SQL because Prisma can express neither of the two kinds — the
+`ck_users_scope` CHECK constraint and the partial unique indexes `uq_users_org_admin` /
+`uq_users_unit_admin`. Prisma's introspection does not see them either, so it will not
+recreate them and should not propose dropping them; if one ever does, delete that
+statement.
+
+### Baselining a database that Alembic built
+
+An existing deployment is **not** rebuilt. `0001_init` reproduces exactly the schema
+Alembic's `0001`–`0006` left behind and `0002_user_names` is its `0007`, so the database
+is adopted rather than migrated:
+
+```bash
+venv/bin/python3 -m scripts.prisma_cli migrate resolve --applied 0001_init
+venv/bin/python3 -m scripts.prisma_cli migrate deploy
+```
+
+The first records `0001_init` as done without running any of it; the second brings the
+database forward from there — applying `0002_user_names` if Alembic's `0007` never
+reached it, and doing nothing if it did. Afterwards the old `alembic_version` table is
+dead weight and can be dropped.

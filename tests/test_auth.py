@@ -1,4 +1,4 @@
-"""`app/auth.py`: what a token proves, and what it deliberately does not.
+"""`src/auth.py`: what a token proves, and what it deliberately does not.
 
 The rule the whole file exists for: a token is an identity claim, not a permission
 claim. Role, scope and the blocked flag are re-read from the database on every request,
@@ -10,10 +10,10 @@ import pytest
 from fastapi import Depends
 from fastapi.testclient import TestClient
 
-from app.auth import (create_token, hash_password, require_roles, require_super_admin,
+from src.auth import (create_token, hash_password, require_roles, require_super_admin,
                       verify_password)
-from app.config import settings
-from app.models import Role, User
+from src.config import settings
+from src.models import Role, User
 
 from .conftest import PASSWORD
 
@@ -60,8 +60,7 @@ def test_no_header_at_all_is_401_not_403(client):
 def test_a_token_for_a_deleted_account_stops_working(world, db, client, as_user):
     ghost = as_user(world.user_a1)
     assert ghost("GET", "/auth/me").status_code == 200
-    db.delete(world.user_a1)
-    db.commit()
+    db.user.delete(where={"id": world.user_a1.id})
     assert ghost("GET", "/auth/me").status_code == 401
 
 
@@ -73,8 +72,10 @@ def test_the_role_is_read_from_the_database_not_from_the_token(world, db, as_use
     was_super = as_user(world.root)
     assert was_super("POST", "/orgs", json={"name": "org-c"}).status_code == 201
 
-    world.root.role = Role.user
-    db.commit()
+    # Written through the client, not by assigning to the object: a Prisma model is a
+    # plain value and changing it changes nothing in the database. `ck_users_scope` still
+    # applies — a super_admin has both scope columns NULL, which `user` also allows.
+    db.user.update(where={"id": world.root.id}, data={"role": Role.user})
     assert was_super("POST", "/orgs", json={"name": "org-d"}).status_code == 403
 
 
@@ -84,8 +85,7 @@ def test_blocking_kills_a_token_that_was_already_issued(world, db, as_user):
     blocked = as_user(world.user_a1)
     assert blocked("GET", "/auth/me").status_code == 200
 
-    world.user_a1.is_active = False
-    db.commit()
+    db.user.update(where={"id": world.user_a1.id}, data={"is_active": False})
     response = blocked("GET", "/auth/me")
     assert response.status_code == 403
     assert response.json()["detail"] == "Account is blocked"
@@ -116,16 +116,14 @@ def test_an_unknown_username_is_401_and_not_404(world, client):
 def test_a_blocked_account_is_told_apart_from_a_wrong_password(world, db, client):
     """403, not 401: the password *was* right, and the person needs to know to ask their
     admin rather than keep retrying it."""
-    world.user_a1.is_active = False
-    db.commit()
+    db.user.update(where={"id": world.user_a1.id}, data={"is_active": False})
     response = client.post("/auth/login", json={"username": "user-a1", "password": PASSWORD})
     assert response.status_code == 403
 
 
 def test_a_blocked_unit_admin_does_not_block_its_unit(world, db, client):
     """Blocking is not inherited."""
-    world.admin_a1.is_active = False
-    db.commit()
+    db.user.update(where={"id": world.admin_a1.id}, data={"is_active": False})
     assert client.post("/auth/login",
                        json={"username": "admin-a1", "password": PASSWORD}).status_code == 403
     assert client.post("/auth/login",

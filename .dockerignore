@@ -10,9 +10,9 @@
 *
 
 !requirements.txt
-!alembic.ini
-!alembic
-!app
+!main.py
+!prisma
+!src
 !job_qa_service
 !scripts
 !Merged_Occupations.xlsx

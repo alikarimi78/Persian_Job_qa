@@ -1,0 +1,208 @@
+{# The A4 report. Rendered by src/reports/render.py through WeasyPrint, never served
+   as a web page — the client's own view of the same answer is Search.jsx.
+
+   Every string here is autoescaped: the payload arrives from the client, which got it
+   from /search, and is model output either way. #}
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  <style>
+    /* Loaded from the files the package ships rather than by family name: the container
+       has no fonts installed at all, and fontconfig would fall back to a Latin face
+       that draws Persian as boxes. Resolved against `render._ASSET_BASE`. */
+    @font-face {
+      font-family: "Vazirmatn";
+      src: url("Vazirmatn-Regular.ttf") format("truetype");
+      font-weight: 400;
+    }
+    @font-face {
+      font-family: "Vazirmatn";
+      src: url("Vazirmatn-Bold.ttf") format("truetype");
+      font-weight: 700;
+    }
+
+    @page {
+      size: A4;
+      margin: 16mm 15mm 18mm;
+      @bottom-center {
+        content: "صفحه " counter(page, persian) " از " counter(pages, persian);
+        font-family: "Vazirmatn", sans-serif;
+        font-size: 8.5pt;
+        color: #94a3b8;
+        padding-top: 4mm;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      font-family: "Vazirmatn", sans-serif;
+      font-size: 10pt;
+      line-height: 1.9;
+      color: #1e293b;
+      margin: 0;
+    }
+
+    /* ---- header: the one band of colour, matching the app's slate chrome ---- */
+    .masthead {
+      display: flex;
+      align-items: center;
+      gap: 5mm;
+      background: #1e293b;
+      color: #f8fafc;
+      border-radius: 3mm;
+      padding: 4mm 5mm;
+    }
+    .masthead img { width: 16mm; height: auto; }
+    .masthead .titles { flex: 1; }
+    .masthead h1 { font-size: 14pt; font-weight: 700; margin: 0; line-height: 1.5; }
+    .masthead p { font-size: 8.5pt; color: #cbd5e1; margin: 1mm 0 0; line-height: 1.7; }
+
+    .issued {
+      font-size: 8.5pt;
+      color: #64748b;
+      margin: 2.5mm 0 0;
+      display: flex;
+      gap: 4mm;
+      flex-wrap: wrap;
+    }
+    .issued span::before { content: "•"; color: #cbd5e1; padding-left: 2mm; }
+    .issued span:first-child::before { content: none; }
+
+    /* ---- the question, and what it was answered from ---- */
+    .question {
+      background: #f1f5f9;
+      border-right: 1.2mm solid #3b82f6;
+      border-radius: 2mm;
+      padding: 3.5mm 4mm;
+      margin-top: 5mm;
+    }
+    .question .label { font-size: 8.5pt; color: #64748b; margin: 0; }
+    .question .text { font-size: 11.5pt; font-weight: 700; margin: 1mm 0 0; line-height: 1.7; }
+    .question .matched { font-size: 9pt; color: #475569; margin: 2mm 0 0; }
+    .question .matched b { color: #1d4ed8; }
+
+    /* A generated record does not exist in the corpus yet, and a report that did not
+       say so would read as one describing a registered job. */
+    .notice {
+      background: #fffbeb;
+      border: 0.3mm solid #fcd34d;
+      border-radius: 2mm;
+      padding: 3mm 4mm;
+      margin-top: 4mm;
+      font-size: 9pt;
+      color: #92400e;
+    }
+
+    h2 {
+      font-size: 10.5pt;
+      font-weight: 700;
+      color: #0f172a;
+      margin: 7mm 0 2.5mm;
+      padding-bottom: 1.5mm;
+      border-bottom: 0.3mm solid #e2e8f0;
+      break-after: avoid;                 /* never a heading alone at a page foot */
+    }
+
+    .answer { white-space: pre-wrap; margin: 0; text-align: justify; }
+
+    /* ---- one block per dataset column ---- */
+    .job-title {
+      font-size: 11pt;
+      font-weight: 700;
+      color: #1d4ed8;
+      margin: 5mm 0 2mm;
+      break-after: avoid;
+    }
+    .field {
+      border: 0.3mm solid #e2e8f0;
+      border-radius: 2mm;
+      padding: 3mm 3.5mm;
+      margin-bottom: 2.5mm;
+      background: #f8fafc;
+    }
+    /* The columns the answer was actually written from — `primary` — carry the same
+       blue the client opens those boxes with. */
+    .field.primary { background: #eff6ff; border-color: #bfdbfe; }
+    .field h3 {
+      font-size: 9.5pt;
+      font-weight: 700;
+      color: #334155;
+      margin: 0 0 1.5mm;
+      break-after: avoid;
+    }
+    .field.primary h3 { color: #1d4ed8; }
+    .field p { margin: 0; text-align: justify; }
+    .field ul { margin: 0; padding-right: 5mm; }
+    .field li { margin-bottom: 0.8mm; }
+    /* Short labels (skills, tools, …) sit two to a row; duties are sentences and get
+       the full width, exactly as JobDetails.jsx splits them on screen. */
+    .field ul.compact { column-count: 2; column-gap: 6mm; }
+    .field ul.compact li { break-inside: avoid; }
+
+    .related { font-size: 9pt; color: #475569; margin: 4mm 0 0; }
+    .related b { color: #0f172a; }
+
+    .colophon {
+      margin-top: 7mm;
+      padding-top: 2.5mm;
+      border-top: 0.3mm solid #e2e8f0;
+      font-size: 8pt;
+      color: #94a3b8;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header class="masthead">
+    <img src="logo.png" alt="">
+    <div class="titles">
+      <h1>{{ title }}</h1>
+      <p>{{ subtitle }}</p>
+    </div>
+  </header>
+
+  <p class="issued">
+    <span>تاریخ صدور: {{ issued_at }}</span>
+    <span>صادرکننده: {{ person }}</span>
+    {% if organization %}<span>سازمان: {{ organization }}</span>{% endif %}
+    {% if unit %}<span>یگان: {{ unit }}</span>{% endif %}
+  </p>
+
+  <section class="question">
+    <p class="label">پرسش کاربر</p>
+    <p class="text">{{ question }}</p>
+    {% if matched %}<p class="matched">{{ matched_label }}: <b>{{ matched }}</b></p>{% endif %}
+  </section>
+
+  {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
+
+  <h2>پاسخ تحلیلی</h2>
+  <p class="answer">{{ answer }}</p>
+
+  {% for job in details %}
+    <h2>مشخصات شغل{% if details|length > 1 %} ({{ loop.index|fa }} از {{ details|length|fa }}){% endif %}</h2>
+    <p class="job-title">{{ job.job_title }}</p>
+    {% for field in job.fields %}
+      <div class="field {{ 'primary' if field.primary }}">
+        <h3>{{ field.label }}</h3>
+        {% if not field.items %}
+          <p>{{ field.value }}</p>
+        {% elif field.key in SENTENCE_LISTS %}
+          <ul>{% for item in field.items %}<li>{{ item }}</li>{% endfor %}</ul>
+        {% else %}
+          <ul class="compact">{% for item in field.items %}<li>{{ item }}</li>{% endfor %}</ul>
+        {% endif %}
+      </div>
+    {% endfor %}
+  {% endfor %}
+
+  {% if related_jobs %}
+    <p class="related"><b>مشاغل مرتبط:</b> {{ related_jobs|join("، ") }}</p>
+  {% endif %}
+
+  <p class="colophon">{{ colophon }}</p>
+</body>
+</html>

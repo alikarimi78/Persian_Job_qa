@@ -1,4 +1,4 @@
-"""`app/rate_limit.py`, and the two endpoints it guards.
+"""`src/rate_limit.py`, and the two endpoints it guards.
 
 The limiter is tested against an injected clock rather than by sleeping — a window is
 five minutes, and a test suite that waits one out gets run by nobody.
@@ -8,10 +8,9 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from app.auth import create_token
-from app.config import settings
-from app.database import get_db
-from app.rate_limit import (RateLimiter, client_ip, login_key, login_limiter,
+from src.auth import create_token
+from src.config import settings
+from src.rate_limit import (RateLimiter, client_ip, login_key, login_limiter,
                             search_limiter)
 
 from .conftest import PASSWORD
@@ -249,8 +248,7 @@ def test_getting_it_right_clears_the_tally(world, client, login_attempts):
 
 def test_a_blocked_account_does_not_spend_its_own_budget(world, db, client, login_attempts):
     """The password was right; the refusal is about the block, not about guessing."""
-    world.user_a1.is_active = False
-    db.commit()
+    db.user.update(where={"id": world.user_a1.id}, data={"is_active": False})
     for _ in range(login_attempts * 2):
         assert client.post("/auth/login", json={"username": "user-a1",
                                                 "password": PASSWORD}).status_code == 403
@@ -284,12 +282,11 @@ class FakeEngine:
 
 @pytest.fixture
 def search_app(db, monkeypatch):
-    from app.engine_manager import manager
-    from app.routers import search as search_router
+    from src.engine_manager import manager
+    from src.routers import search as search_router
 
     api = FastAPI()
     api.include_router(search_router.router)
-    api.dependency_overrides[get_db] = lambda: db
     engine = FakeEngine()
     monkeypatch.setattr(manager, "_engine", engine)
     monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)

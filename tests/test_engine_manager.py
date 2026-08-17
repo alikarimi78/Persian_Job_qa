@@ -12,7 +12,7 @@ approved but unsearchable until somebody pressed the button by hand.
 
 import threading
 
-from app.engine_manager import EngineManager
+from src.engine_manager import EngineManager
 
 TIMEOUT = 5  # generous: these waits are on an in-process event, not on any real work
 

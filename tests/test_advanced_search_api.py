@@ -12,10 +12,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.auth import create_token
-from app.config import settings
-from app.database import get_db
-from app.rate_limit import search_limiter
+from src.auth import create_token
+from src.config import settings
+from src.rate_limit import search_limiter
 
 
 class FakeEngine:
@@ -52,7 +51,7 @@ class FakeEngine:
 
 @pytest.fixture
 def engine(monkeypatch):
-    from app.engine_manager import manager
+    from src.engine_manager import manager
     fake = FakeEngine()
     monkeypatch.setattr(manager, "_engine", fake)
     return fake
@@ -60,11 +59,10 @@ def engine(monkeypatch):
 
 @pytest.fixture
 def search_app(db, monkeypatch):
-    from app.routers import search as search_router
+    from src.routers import search as search_router
 
     api = FastAPI()
     api.include_router(search_router.router)
-    api.dependency_overrides[get_db] = lambda: db
     # The two limiters are process-wide; this endpoint shares /search's budget, and a
     # neighbouring test's tally must not decide this one's outcome.
     monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", False)
@@ -183,6 +181,6 @@ def test_it_shares_the_search_budget(world, engine, search_app, monkeypatch):
 
 
 def test_no_engine_is_503_not_500(world, client, monkeypatch):
-    from app.engine_manager import manager
+    from src.engine_manager import manager
     monkeypatch.setattr(manager, "_engine", None)
     assert ask(client, world.user_a1, VALID).status_code == 503

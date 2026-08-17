@@ -9,7 +9,7 @@ back, so most of what follows is that shape.
 
 import pytest
 
-from app.models import Organization, Unit, User
+from src.models import full_name
 
 from .conftest import PASSWORD
 
@@ -22,10 +22,7 @@ NAME = {"first_name": "زهرا", "last_name": "کریمی"}
 
 def _free_unit(db, world, name="unit-a9"):
     """A unit of org_a with no admin sitting in it."""
-    unit = Unit(name=name, organization_id=world.org_a.id)
-    db.add(unit)
-    db.commit()
-    return unit
+    return db.unit.create(data={"name": name, "organization_id": world.org_a.id})
 
 
 # ---------- POST /accounts/super-admins ----------
@@ -49,9 +46,7 @@ def test_a_new_super_admin_belongs_to_no_organization(world, as_user):
 # ---------- POST /accounts/org-admins ----------
 
 def test_an_organizations_admin_is_appointed_by_a_super_admin(world, as_user, db):
-    fresh = Organization(name="org-c")
-    db.add(fresh)
-    db.commit()
+    fresh = db.organization.create(data={"name": "org-c"})
 
     response = as_user(world.root)("POST", "/accounts/org-admins",
                                    json={"username": "admin-c", "password": "password12", **NAME,
@@ -93,8 +88,7 @@ def test_an_org_admin_staffs_the_units_of_its_own_organization(world, db, as_use
 
 def test_an_org_admin_may_not_staff_another_organizations_unit(world, db, as_user):
     """Passes the role gate and is stopped by the scope check on the target unit."""
-    db.delete(world.admin_b1)
-    db.commit()
+    db.user.delete(where={"id": world.admin_b1.id})
     assert as_user(world.admin_a)("POST", "/accounts/unit-admins",
                                   json={"username": "admin-b9", "password": "password12", **NAME,
                                         "unit_id": world.unit_b1.id}).status_code == 403
@@ -279,9 +273,7 @@ def test_moving_an_account_that_lives_in_no_unit_is_409(world, as_user):
 def test_an_organizations_admin_moves_to_another_organization(world, db, as_user):
     """The `/unit` endpoint has nothing to offer an org_admin — it lives in an
     organization, not in a unit — so this is the whole of «ویرایش» for that row."""
-    fresh = Organization(name="org-c")
-    db.add(fresh)
-    db.commit()
+    fresh = db.organization.create(data={"name": "org-c"})
 
     response = as_user(world.root)("POST", f"/accounts/{world.admin_a.id}/organization",
                                    json={"organization_id": fresh.id})
@@ -291,9 +283,7 @@ def test_an_organizations_admin_moves_to_another_organization(world, db, as_user
 
 
 def test_the_organization_it_leaves_can_be_restaffed(world, db, as_user):
-    fresh = Organization(name="org-c")
-    db.add(fresh)
-    db.commit()
+    fresh = db.organization.create(data={"name": "org-c"})
 
     root = as_user(world.root)
     root("POST", f"/accounts/{world.admin_a.id}/organization",
@@ -326,9 +316,7 @@ def test_moving_an_account_that_lives_in_no_organization_is_409(world, as_user):
 def test_only_a_super_admin_moves_an_organizations_admin(world, db, as_user, caller):
     """An org_admin has no second organization to move a peer into, and cannot manage
     one in the first place."""
-    fresh = Organization(name="org-c")
-    db.add(fresh)
-    db.commit()
+    fresh = db.organization.create(data={"name": "org-c"})
     assert as_user(getattr(world, caller))(
         "POST", f"/accounts/{world.admin_a.id}/organization",
         json={"organization_id": fresh.id}).status_code == 403
@@ -344,7 +332,7 @@ def test_moving_to_an_organization_that_does_not_exist_is_404(world, as_user):
 def test_a_unit_admin_deletes_its_own_users_only(world, db, as_user):
     admin_a1 = as_user(world.admin_a1)
     assert admin_a1("DELETE", f"/accounts/{world.user_a1.id}").status_code == 204
-    assert db.query(User).filter(User.username == "user-a1").first() is None
+    assert db.user.find_unique(where={"username": "user-a1"}) is None
     assert admin_a1("DELETE", f"/accounts/{world.user_a2.id}").status_code == 403
 
 
@@ -415,9 +403,9 @@ def test_an_admin_fixes_the_name_on_an_account_below_them(world, db, as_user):
                                        json={"first_name": " علی ", "last_name": "کریمی"})
 
     assert response.status_code == 200
-    db.refresh(world.user_a1)
-    assert world.user_a1.full_name == "علی کریمی"          # trimmed on the way in
-    assert world.user_a1.username == "user-a1"             # the credential is untouched
+    stored = world.reload(world.user_a1)
+    assert full_name(stored) == "علی کریمی"                # trimmed on the way in
+    assert stored.username == "user-a1"                    # the credential is untouched
 
 
 @pytest.mark.parametrize("caller, expected", [("root", 200), ("admin_a", 200),
@@ -446,8 +434,7 @@ def test_an_account_sets_its_own_name(world, db, as_user):
 
     assert response.status_code == 200
     assert response.json()["full_name"] == "مهدی رضایی"
-    db.refresh(world.root)
-    assert world.root.full_name == "مهدی رضایی"
+    assert full_name(world.reload(world.root)) == "مهدی رضایی"
 
 
 def test_me_reports_the_name(world, as_user):

@@ -7,8 +7,6 @@ who may create and delete a container, and the rule that a non-empty one does no
 
 import pytest
 
-from app.models import Unit, User
-
 
 # ---------- organizations ----------
 
@@ -87,9 +85,9 @@ def test_an_emptied_unit_goes_and_takes_nobody_with_it(world, db, as_user):
     for account in [world.user_a2, world.admin_a2]:
         assert admin_a("DELETE", f"/accounts/{account.id}").status_code == 204
     assert admin_a("DELETE", f"/units/{world.unit_a2.id}").status_code == 204
-    assert db.query(Unit).filter(Unit.name == "unit-a2").first() is None
+    assert db.unit.find_first(where={"name": "unit-a2"}) is None
     # the neighbouring unit is untouched
-    assert db.query(User).filter(User.unit_id == world.unit_a1.id).count() == 3
+    assert db.user.count(where={"unit_id": world.unit_a1.id}) == 3
 
 
 def test_units_of_one_organization_may_share_a_name_with_anothers(world, as_user):
@@ -122,7 +120,7 @@ def test_renaming_an_organization_moves_nothing_else(world, db, as_user):
     assert response.json() == {"id": world.org_a.id, "name": "ستاد مرکزی",
                                "code": None, "address": None, "phone": None,
                                "email": None, "has_logo": False}
-    assert db.query(Unit).filter(Unit.organization_id == world.org_a.id).count() == 2
+    assert db.unit.count(where={"organization_id": world.org_a.id}) == 2
 
 
 # ---------- the organization profile (admin_panel.mp4's «افزودن سازمان») ----------
@@ -238,7 +236,7 @@ def test_svg_is_not_an_accepted_logo_type(world, as_user):
 
 def test_an_oversized_logo_is_refused(world, as_user):
     import base64
-    from app.routers.orgs import MAX_LOGO_BYTES
+    from src.routers.orgs import MAX_LOGO_BYTES
     raw = b"\x89PNG\r\n\x1a\n" + b"\x00" * MAX_LOGO_BYTES
     payload = base64.b64encode(raw).decode()
     assert as_user(world.root)(

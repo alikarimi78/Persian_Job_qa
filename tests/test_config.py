@@ -1,15 +1,17 @@
-"""`app/config.py`: a missing secret has to stop the process, not be papered over.
+"""`src/config.py`: a missing secret has to stop the process, not be papered over.
 
 The failure this file locks down is the quiet one. `JWT_SECRET: str = getenv("JWT_SECRET")`
 used to hand pydantic `None` when the variable was unset, and the five-part database URL
-became the literal string `postgresql+psycopg2://None:None@None:None/None` — the app
+became the literal string `postgresql://None:None@None:None/None` — the app
 started, signed tokens with a null key, and only fell over later and somewhere else.
 """
+
+import os
 
 import pytest
 from pydantic import ValidationError
 
-from app.config import Settings, load_settings
+from src.config import Settings, load_settings
 
 SECRETS = ["JWT_SECRET", "OPENAI_API_KEY", "ADMIN_USERNAME", "ADMIN_PASSWORD"]
 DATABASE_PARTS = ["POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "DATABASE_HOST",
@@ -24,7 +26,7 @@ COMPLETE = {"JWT_SECRET": "a" * 32,
             "OPENAI_API_KEY": "sk-test",
             "ADMIN_USERNAME": "admin",
             "ADMIN_PASSWORD": "password12",
-            "DATABASE_URL": "postgresql+psycopg2://u:p@db:5432/jobs"}
+            "DATABASE_URL": "postgresql://u:p@db:5432/jobs"}
 
 
 @pytest.fixture
@@ -46,7 +48,7 @@ def test_a_complete_environment_is_accepted(env):
     env()
     settings = Settings()
     assert settings.JWT_SECRET == "a" * 32
-    assert settings.DATABASE_URL == "postgresql+psycopg2://u:p@db:5432/jobs"
+    assert settings.DATABASE_URL == "postgresql://u:p@db:5432/jobs"
 
 
 @pytest.mark.parametrize("secret", SECRETS)
@@ -85,7 +87,7 @@ def test_an_admin_password_too_short_for_the_api_is_refused(env):
 def test_the_url_is_assembled_from_its_parts_when_it_is_not_given(env):
     env(DATABASE_URL=None, POSTGRES_USER="jobs", POSTGRES_PASSWORD="secret",
         POSTGRES_DB="jobs_db", DATABASE_HOST="db", DATABASE_PORT=5433)
-    assert Settings().DATABASE_URL == "postgresql+psycopg2://jobs:secret@db:5433/jobs_db"
+    assert Settings().DATABASE_URL == "postgresql://jobs:secret@db:5433/jobs_db"
 
 
 def test_the_port_has_a_default_but_nothing_else_does(env):
@@ -97,7 +99,7 @@ def test_the_port_has_a_default_but_nothing_else_does(env):
 def test_a_password_with_punctuation_does_not_cut_the_url_in_half(env):
     env(DATABASE_URL=None, POSTGRES_USER="jobs", POSTGRES_PASSWORD="p@ss/word",
         POSTGRES_DB="jobs_db", DATABASE_HOST="db")
-    assert Settings().DATABASE_URL == "postgresql+psycopg2://jobs:p%40ss%2Fword@db:5432/jobs_db"
+    assert Settings().DATABASE_URL == "postgresql://jobs:p%40ss%2Fword@db:5432/jobs_db"
 
 
 def test_a_half_configured_database_names_what_is_missing(env):
@@ -113,6 +115,24 @@ def test_an_explicit_url_wins_over_the_parts(env):
     env(POSTGRES_USER="ignored", POSTGRES_PASSWORD="ignored", POSTGRES_DB="ignored",
         DATABASE_HOST="ignored")
     assert Settings().DATABASE_URL == COMPLETE["DATABASE_URL"]
+
+
+def test_the_url_carries_no_sqlalchemy_driver_suffix(env):
+    """`postgresql+psycopg2://` was SQLAlchemy naming a driver. Prisma's query engine
+    parses the URL itself and refuses a scheme it does not know, so the suffix is not a
+    harmless leftover — it is a connection that never opens."""
+    env(DATABASE_URL=None, POSTGRES_USER="jobs", POSTGRES_PASSWORD="secret",
+        POSTGRES_DB="jobs_db", DATABASE_HOST="db")
+    assert Settings().DATABASE_URL.startswith("postgresql://")
+
+
+def test_the_assembled_url_reaches_the_environment_prisma_reads(env):
+    """The `prisma` CLI and the query engine subprocess read DATABASE_URL themselves and
+    know nothing about this class, so assembling it is only half the job."""
+    env(DATABASE_URL=None, POSTGRES_USER="jobs", POSTGRES_PASSWORD="secret",
+        POSTGRES_DB="jobs_db", DATABASE_HOST="db")
+    settings = Settings()
+    assert os.environ["DATABASE_URL"] == settings.DATABASE_URL
 
 
 # ---------- what the crash itself says ----------

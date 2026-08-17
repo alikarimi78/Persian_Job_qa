@@ -1,4 +1,4 @@
-"""`app/accounts.py`: the scope rules, tested straight rather than through HTTP.
+"""`src/accounts.py`: the scope rules, tested straight rather than through HTTP.
 
 Every one of these is "may this caller act on that record", and the answer is always the
 provisioning chain read downwards — you may act on the accounts you could have created.
@@ -8,11 +8,12 @@ this file checks the answers.
 
 import pytest
 from fastapi import HTTPException
+from prisma.errors import PrismaError
 
-from app.accounts import (assert_can_manage_account, assert_manages_organization,
+from src.accounts import (assert_can_manage_account, assert_manages_organization,
                           assert_manages_unit, create_account, delete_account,
                           move_to_unit, visible_users)
-from app.models import JobRecord, JobStatus, Organization, Role, Unit
+from src.models import JobStatus, Role
 
 
 def refuses(fn, *args, status=403):
@@ -114,7 +115,7 @@ def test_an_ordinary_user_may_act_on_nobody(world):
 # ---------- visible_users ----------
 
 def test_a_super_admin_sees_every_account(world, db):
-    assert visible_users(db, world.root).count() == db.query(type(world.root)).count()
+    assert len(visible_users(db, world.root)) == db.user.count()
 
 
 def test_an_org_admin_sees_the_accounts_of_its_units(world, db):
@@ -164,18 +165,14 @@ def test_a_unit_holds_as_many_ordinary_users_as_it_likes(world, db):
 def test_a_created_account_carries_exactly_its_own_scope_column(world, db):
     """`ck_users_scope`: a unit_admin's organization is reached through its unit and is
     never stored twice, so the two cannot drift."""
-    fresh = Unit(name="unit-a3", organization_id=world.org_a.id)
-    db.add(fresh)
-    db.commit()
+    fresh = db.unit.create(data={"name": "unit-a3", "organization_id": world.org_a.id})
 
     admin = create_account(db, username="admin-a3", password="password12",
                            role=Role.unit_admin, unit_id=fresh.id)
     assert admin.unit_id == fresh.id
     assert admin.organization_id is None
 
-    org_c = Organization(name="org-c")
-    db.add(org_c)
-    db.commit()
+    org_c = db.organization.create(data={"name": "org-c"})
 
     org_admin = create_account(db, username="admin-c", password="password12",
                                role=Role.org_admin, organization_id=org_c.id)
@@ -188,7 +185,7 @@ def test_a_created_account_carries_exactly_its_own_scope_column(world, db):
 def test_a_user_moves_and_keeps_its_role(world, db):
     moved = move_to_unit(db, world.user_a1, world.unit_a2)
     assert moved.unit_id == world.unit_a2.id
-    assert moved.role is Role.user
+    assert moved.role == Role.user
 
 
 def test_an_account_that_lives_in_no_unit_cannot_move(world, db):
@@ -205,26 +202,59 @@ def test_a_unit_admin_may_not_land_on_a_sitting_admin(world, db):
 
 
 def test_a_unit_admin_moves_into_a_unit_that_has_none(world, db):
-    db.delete(world.admin_b1)
-    db.commit()
+    db.user.delete(where={"id": world.admin_b1.id})
     moved = move_to_unit(db, world.admin_a1, world.unit_b1)
     assert moved.unit_id == world.unit_b1.id
-    assert moved.role is Role.unit_admin
+    assert moved.role == Role.unit_admin
 
 
 # ---------- delete_account ----------
 
 def test_deleting_an_account_keeps_what_it_suggested(world, db):
-    """Migration 0005's `ON DELETE SET NULL`: an approved record is part of the dataset
-    everyone searches and must not vanish because its author left."""
-    record = JobRecord(job_title="راننده زره‌پوش", status=JobStatus.approved,
-                       suggested_by=world.user_a1.id)
-    db.add(record)
-    db.commit()
+    """The `ON DELETE SET NULL` in `prisma/migrations/0001_init`: an approved record is
+    part of the dataset everyone searches and must not vanish because its author left."""
+    db.jobrecord.create(data={"job_title": "راننده زره‌پوش",
+                              "status": JobStatus.approved,
+                              "suggested_by": world.user_a1.id})
 
     delete_account(db, world.user_a1)
-    db.expire_all()
 
-    survivor = db.query(JobRecord).one()
-    assert survivor.job_title == "راننده زره‌پوش"
-    assert survivor.suggested_by is None
+    survivors = db.jobrecord.find_many()
+    assert len(survivors) == 1
+    assert survivors[0].job_title == "راننده زره‌پوش"
+    assert survivors[0].suggested_by is None
+
+
+# ---------- the invariants Prisma cannot declare ----------
+# `ck_users_scope` and the two partial unique indexes are hand-written SQL at the foot of
+# `prisma/migrations/0001_init/migration.sql`: Prisma has no syntax for a CHECK
+# constraint or for a filtered index, and its introspection does not see either, so
+# nothing but these tests would notice them going missing from a future migration.
+
+def test_the_database_refuses_a_role_carrying_the_wrong_scope_column(world, db):
+    """`ck_users_scope`. Checked here rather than only in `create_account`, because the
+    handlers are not the only writer — the seed script and any future migration write
+    rows too."""
+    with pytest.raises(PrismaError):
+        db.user.create(data={"username": "impossible", "hashed_password": "x",
+                             "role": Role.unit_admin,
+                             "organization_id": world.org_a.id,   # belongs to a unit,
+                             "unit_id": world.unit_a1.id})        # never to both
+    with pytest.raises(PrismaError):
+        db.user.create(data={"username": "also-impossible", "hashed_password": "x",
+                             "role": Role.super_admin, "unit_id": world.unit_a1.id})
+
+
+def test_the_database_refuses_a_second_admin_in_one_unit(world, db):
+    """`uq_users_unit_admin`, past the 409 `create_account` answers with first."""
+    with pytest.raises(PrismaError):
+        db.user.create(data={"username": "second-a1", "hashed_password": "x",
+                             "role": Role.unit_admin, "unit_id": world.unit_a1.id})
+
+
+def test_the_index_that_refuses_it_is_partial(world, db):
+    """The other half of the same index: ordinary users share a `unit_id` freely. Without
+    the WHERE clause the constraint above would cap a unit at one *account*."""
+    db.user.create(data={"username": "user-a1c", "hashed_password": "x",
+                         "role": Role.user, "unit_id": world.unit_a1.id})
+    assert db.user.count(where={"unit_id": world.unit_a1.id}) == 4

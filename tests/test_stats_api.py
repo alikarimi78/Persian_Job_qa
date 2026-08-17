@@ -9,7 +9,7 @@ and two, and a wrong scope shows up as a number from the other organization.
 
 import pytest
 
-from app.models import JobRecord, JobStatus
+from src.models import JobStatus
 
 
 @pytest.mark.parametrize("caller, expected", [("root", 200), ("admin_a", 200),
@@ -58,12 +58,13 @@ def test_the_dataset_size_is_global_but_the_queue_is_scoped(world, db, as_user):
     """`corpus_records` is the one shared dataset everyone searches, so it does not
     shrink to a tenant. The pending/approved counts do: they are what *these* accounts
     suggested."""
-    db.add_all([
-        JobRecord(job_title="seeded", status=JobStatus.approved),          # no suggester
-        JobRecord(job_title="from-a", status=JobStatus.pending, suggested_by=world.user_a1.id),
-        JobRecord(job_title="from-b", status=JobStatus.pending, suggested_by=world.user_b1.id),
+    db.jobrecord.create_many(data=[
+        {"job_title": "seeded", "status": JobStatus.approved},             # no suggester
+        {"job_title": "from-a", "status": JobStatus.pending,
+         "suggested_by": world.user_a1.id},
+        {"job_title": "from-b", "status": JobStatus.pending,
+         "suggested_by": world.user_b1.id},
     ])
-    db.commit()
 
     root = as_user(world.root)("GET", "/stats").json()["jobs"]
     assert (root["corpus_records"], root["pending"]) == (1, 2)
@@ -77,8 +78,8 @@ def test_the_dataset_size_is_global_but_the_queue_is_scoped(world, db, as_user):
 def test_an_admins_own_suggestion_counts_towards_their_scope(world, db, as_user):
     """`visible_users` excludes the caller — they do not manage themselves — but what
     they suggested is still their organization's."""
-    db.add(JobRecord(job_title="mine", status=JobStatus.pending, suggested_by=world.admin_a.id))
-    db.commit()
+    db.jobrecord.create(data={"job_title": "mine", "status": JobStatus.pending,
+                              "suggested_by": world.admin_a.id})
     assert as_user(world.admin_a)("GET", "/stats").json()["jobs"]["pending"] == 1
 
 

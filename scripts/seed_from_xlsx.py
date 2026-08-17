@@ -6,28 +6,30 @@ import sys
 
 import pandas as pd
 
-from app.auth import hash_password
-from app.config import settings
-from app.database import SessionLocal
-from app.models import User, Role, JobRecord, JobStatus
+from src.auth import hash_password
+from src.config import settings
+from src.database import connect, db, disconnect
+from src.models import JobStatus, Role
 
 COLUMNS = ["job_title", "aliases", "tools", "skills", "knowledge", "abilities",
            "work_context", "career_path_next", "description", "responsibilities"]
 
 
 def main(xlsx_path: str):
-    # Schema must already exist: run `alembic upgrade head` first.
-    db = SessionLocal()
+    # The schema must already exist: run `python -m scripts.prisma_cli migrate deploy`
+    # first. The container's CMD chains the two in that order.
+    connect()
     try:
         # The bootstrap account: every other account is created through the API by the
         # level above it, so the first super_admin has to come from somewhere else.
-        if not db.query(User).filter(User.username == settings.ADMIN_USERNAME).first():
-            db.add(User(username=settings.ADMIN_USERNAME,
-                        hashed_password=hash_password(settings.ADMIN_PASSWORD),
-                        role=Role.super_admin))
+        if not db.user.find_unique(where={"username": settings.ADMIN_USERNAME}):
+            db.user.create(data={
+                "username": settings.ADMIN_USERNAME,
+                "hashed_password": hash_password(settings.ADMIN_PASSWORD),
+                "role": Role.super_admin})
             print(f"Super admin '{settings.ADMIN_USERNAME}' created.")
 
-        if db.query(JobRecord).count() == 0:
+        if db.jobrecord.count() == 0:
             df = pd.read_excel(xlsx_path)
             df.columns = [str(c).strip().lower() for c in df.columns]
             for col in COLUMNS:
@@ -35,14 +37,17 @@ def main(xlsx_path: str):
                     df[col] = ""
                 df[col] = df[col].fillna("").astype(str)
             df = df[df["job_title"].str.strip() != ""]
-            db.add_all(JobRecord(**{c: row[c] for c in COLUMNS}, status=JobStatus.approved)
-                       for _, row in df.iterrows())
+            # One statement for the whole dataset. `add_all` + `commit` used to batch the
+            # inserts for us; `create_many` is Prisma's equivalent, and the alternative
+            # here would be 1116 separate round trips.
+            db.jobrecord.create_many(
+                data=[{**{c: row[c] for c in COLUMNS}, "status": JobStatus.approved}
+                      for _, row in df.iterrows()])
             print(f"Seeded {len(df)} approved job records.")
         else:
             print("jobs_info is not empty; skipping dataset seed.")
-        db.commit()
     finally:
-        db.close()
+        disconnect()
 
 
 if __name__ == "__main__":

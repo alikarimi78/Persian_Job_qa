@@ -10,8 +10,8 @@ changing it there is a dataset edit (and a rebuild), not a review.
 
 import pytest
 
-from app.engine_manager import manager
-from app.models import JobRecord, JobStatus
+from src.engine_manager import manager
+from src.models import JobRecord, JobStatus
 
 COLUMNS = {
     "job_title": "راننده خودرو زرهی",
@@ -29,11 +29,8 @@ COLUMNS = {
 
 @pytest.fixture
 def pending(db, world) -> JobRecord:
-    record = JobRecord(**COLUMNS, status=JobStatus.pending, suggested_by=world.user_a1.id)
-    db.add(record)
-    db.commit()
-    db.refresh(record)
-    return record
+    return db.jobrecord.create(data={**COLUMNS, "status": JobStatus.pending,
+                                     "suggested_by": world.user_a1.id})
 
 
 @pytest.fixture
@@ -56,11 +53,13 @@ def test_super_admin_edits_a_pending_suggestion(as_user, world, pending, db):
 
     assert response.status_code == 200
     assert response.json()["job_title"] == "راننده نفربر زرهی"
-    db.refresh(pending)
-    assert pending.skills == "رانندگی در زمین ناهموار | امدادرسانی"
+    # Re-read rather than refreshed: a Prisma model is a value, so the fixture's copy
+    # still holds what the row said when it was created.
+    stored = db.jobrecord.find_unique(where={"id": pending.id})
+    assert stored.skills == "رانندگی در زمین ناهموار | امدادرسانی"
     # An edit is not a decision: the record is still waiting for one.
-    assert pending.status == JobStatus.pending
-    assert pending.suggested_by == world.user_a1.id
+    assert stored.status == JobStatus.pending
+    assert stored.suggested_by == world.user_a1.id
 
 
 def test_the_edit_survives_into_the_approval(as_user, world, pending, db):
@@ -81,8 +80,7 @@ def test_only_a_super_admin_may_edit(as_user, world, pending, account):
 
 
 def test_a_reviewed_record_is_closed_to_editing(as_user, world, pending, db):
-    pending.status = JobStatus.approved
-    db.commit()
+    db.jobrecord.update(where={"id": pending.id}, data={"status": JobStatus.approved})
 
     response = as_user(world.root)("PUT", f"/admin/suggestions/{pending.id}",
                                    json=edited(job_title="عنوان دیگر"))
