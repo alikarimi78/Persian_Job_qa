@@ -32,3 +32,7 @@ sentence-transformers>=3.0
 torch>=2.6,<2.8
 openai>=1.30
 hazm>=0.10
+
+# scripts
+requests==2.32.5
+google-genai==2.20.0
