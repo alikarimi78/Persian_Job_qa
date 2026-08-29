@@ -37,7 +37,7 @@ BACKFILL_COLUMNS = ["knowledge", "abilities"]
 # every column through the list-separator normalizer and left "|" in these; the repair
 # below undoes that on rows already in the database. "|" stays untouched everywhere
 # else, since it is the intended separator for the list columns.
-PROSE_COLUMNS = ["job_title", "description", "work_context"]
+PROSE_COLUMNS = ["job_title", "description"]
 
 
 def _key(title) -> str:

@@ -1,0 +1,44 @@
+{
+  "hard": [],
+  "soft": {
+    "empty_cells": {},
+    "item_drift": {},
+    "term_variants": {},
+    "untranslated": {
+      "tools": {
+        "rows": 28,
+        "must_be_persian": false,
+        "batches": [
+          "batch_0042",
+          "batch_0056",
+          "batch_0057",
+          "batch_0058",
+          "batch_0059",
+          "batch_0063",
+          "batch_0070",
+          "batch_0072",
+          "batch_0074",
+          "batch_0076",
+          "batch_0077",
+          "batch_0082",
+          "batch_0083",
+          "batch_0084",
+          "batch_0086",
+          "batch_0087",
+          "batch_0089",
+          "batch_0091",
+          "batch_0092",
+          "batch_0093",
+          "batch_0099"
+        ],
+        "examples": [
+          "29-1022.00",
+          "33-9092.00",
+          "35-2011.00",
+          "35-2012.00",
+          "35-3031.00"
+        ]
+      }
+    }
+  }
+}

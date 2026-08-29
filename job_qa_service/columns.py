@@ -10,11 +10,20 @@ the checklist in CLAUDE.md.
 EXPECTED_COLUMNS = ["job_title", "aliases", "tools", "skills", "knowledge", "abilities",
                     "work_context", "career_path_next", "description", "responsibilities"]
 
-# The three columns where a comma is punctuation rather than a list separator;
+# The two columns where a comma is punctuation rather than a list separator;
 # everything else is a "|"-joined list. A generated draft is checked against this
 # before it leaves the engine, so a model reaching for "|" in prose cannot
 # reintroduce the corruption the dataset was repaired of.
-PROSE_COLUMNS = ["job_title", "description", "work_context"]
+#
+# `work_context` was here until the second translation pass (2026-08-29), and moved
+# because the *data* moved: it now carries O*NET's own context factors, 14 of them per
+# record, where the first corpus carried one authored sentence. Holding 14 items as
+# prose made the column stop discriminating — the whole cell is one piece to
+# `profile.record_items`, so a 57-token blob contains almost any item a user types, and
+# «فشار زمانی» matched 801 of 1118 records against 54 of 1116 before. A record whose
+# work_context genuinely is one sentence (the 102 military rows, and anything suggested
+# through the form before this) is simply a one-item list.
+PROSE_COLUMNS = ["job_title", "description"]
 
 FIELD_LABELS = {
     "job_title": "عنوان شغل", "aliases": "نام‌های دیگر", "tools": "ابزارها",
