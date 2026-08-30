@@ -13,6 +13,32 @@ import os
 EMBED_MODEL_NAME = os.getenv("EMBED_MODEL_NAME", "BAAI/bge-m3")
 EMB_CACHE_DIR = os.getenv("EMB_CACHE_DIR", "emb_cache")
 
+# How the corpus is fed to the encoder. Both are bounds on *memory*, and both exist
+# because the corpus grew: the first translation pass wrote records of ~200 tokens,
+# the second writes 1406 at the median and 4401 at the longest (responsibilities,
+# work_context and the four taxonomies are all lists now). bge-m3 accepts 8192 tokens
+# and sentence-transformers batches 32 of them by default, sorted longest-first — so
+# the very first batch of a full re-encode asks a 4 GB card for more than it has and
+# the engine never loads.
+#
+# Measured on the dev GTX 1050 (3.94 GiB), fp32 weights alone taking 2.12 GiB, over
+# the longest records in the corpus — peak reserved, and throughput per text:
+#
+#   seq=1024  bs=1 2.20 GiB  bs=4 2.41  bs=8 2.69  bs=16 3.22   ~0.8 s/text
+#   seq=2048  bs=1 2.27 GiB  bs=4 2.69  bs=8 3.22               ~1.85 s/text
+#
+# A bigger batch buys **nothing** on this card — the GPU is already saturated by one
+# sequence of this length, so 4 and 16 encode at the same rate — and the only thing it
+# changes is how close the peak sits to the ceiling. Hence 4: ~1.2 GiB of headroom for
+# the same speed. On a larger card raise both.
+#
+# The cap truncates 7.6% of records, and only their tail: `_combined_text` orders the
+# columns so that what is lost is the end of `career_path_next` — a list of *other*
+# occupations' titles — and never the title, description or duties. Lowering it to
+# 1024 would cut into `work_context` on the median record.
+EMB_BATCH_SIZE = int(os.getenv("EMB_BATCH_SIZE", "4"))
+EMB_MAX_SEQ_LEN = int(os.getenv("EMB_MAX_SEQ_LEN", "2048"))
+
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_BASE_URL = os.getenv("OPENAI_BASE_URL")
 LLM_API_KEY = os.getenv("OPENAI_API_KEY")

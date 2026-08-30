@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """JobQAEngine: corpus loading, embeddings, retrieval, and the two answer paths."""
 
+import logging
 import re
 import threading
 from collections import defaultdict
@@ -14,7 +15,8 @@ from .bm25 import BM25
 from .columns import (DISCOVERY_FIELDS, DISCOVERY_PRIMARY, EXPECTED_COLUMNS,
                       FIELD_LABELS, PROSE_COLUMNS)
 from .config import (DISCOVERY_FLOOR, DISCOVERY_MATCH, DISCOVERY_RELATED,
-                     EMBED_MODEL_NAME, MAX_CANDIDATES, PAIR_SIM_MAX, PROFILE_DENSE_ONLY,
+                     EMB_BATCH_SIZE, EMB_MAX_SEQ_LEN, EMBED_MODEL_NAME,
+                     MAX_CANDIDATES, PAIR_SIM_MAX, PROFILE_DENSE_ONLY,
                      PROFILE_TOP_N, PROFILE_W_COVER, PROFILE_W_DENSE, RRF_K, SCAN_DEPTH,
                      SECONDARY_MARGIN, SECONDARY_MIN, THRESHOLD_MATCH, THRESHOLD_SPARSE,
                      W_FULL, W_TITLE)
@@ -34,8 +36,12 @@ from .text import normalize_text, parse_json_object
 try:
     import torch
     _HAS_CUDA = torch.cuda.is_available()
+    # torch.OutOfMemoryError is 2.5+; torch.cuda.OutOfMemoryError is the older name.
+    _OOM = tuple({getattr(torch, "OutOfMemoryError", None),
+                  getattr(torch.cuda, "OutOfMemoryError", None)} - {None}) or (RuntimeError,)
 except Exception:
     _HAS_CUDA = False
+    _OOM = ()
 
 # Third outcome of generation, distinct from None: the model looked at the request
 # and judged that no real occupation matches it. Retrieval cannot make that call --
@@ -44,6 +50,8 @@ except Exception:
 # like «عصاره‌گیری گیاهان دارویی» measures 0.515. The two ranges overlap, so no
 # threshold separates them; "is this a real job" is world knowledge, not geometry.
 NOT_A_JOB = object()
+
+log = logging.getLogger("job_qa_service")
 
 _MODEL_CACHE = {}
 _MODEL_LOCK = threading.Lock()
@@ -62,7 +70,12 @@ def shared_model():
     key = (EMBED_MODEL_NAME, device)
     with _MODEL_LOCK:
         if key not in _MODEL_CACHE:
-            _MODEL_CACHE[key] = SentenceTransformer(EMBED_MODEL_NAME, device=device)
+            model = SentenceTransformer(EMBED_MODEL_NAME, device=device)
+            # bge-m3 declares 8192; a record is 1406 tokens at the median and the cap
+            # is what bounds the activation memory of a batch. See EMB_MAX_SEQ_LEN.
+            if EMB_MAX_SEQ_LEN:
+                model.max_seq_length = min(model.max_seq_length, EMB_MAX_SEQ_LEN)
+            _MODEL_CACHE[key] = model
         return _MODEL_CACHE[key]
 
 
@@ -118,7 +131,41 @@ class JobQAEngine:
     def _encode(self, texts, prefix):
         if "e5" in EMBED_MODEL_NAME.lower():          # E5 models need query:/passage: prefixes
             texts = [f"{prefix}: {t}" for t in texts]
-        return self.model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+        return self._encode_bounded(texts)
+
+    def _encode_bounded(self, texts):
+        """Encode under an explicit batch size, halving it and finally falling back to
+        the CPU rather than letting a CUDA OOM leave the process with no engine.
+
+        The default batch is sized for the smallest card this runs on (see
+        EMB_BATCH_SIZE), but a full re-encode is the one moment the sizing can still be
+        wrong: sentence-transformers sorts by length, so the very first batch is the
+        longest records in the corpus and an OOM here costs the whole startup — the
+        engine simply never loads and /search answers 503. The retry is deliberately
+        not silent: falling back to the CPU turns a ~25-minute re-encode into hours and
+        takes every query with it, and the log is the only place that would show why."""
+        batch = max(1, EMB_BATCH_SIZE)
+        while True:
+            try:
+                return self.model.encode(texts, batch_size=batch,
+                                         normalize_embeddings=True, show_progress_bar=False)
+            except _OOM:
+                if not _HAS_CUDA:
+                    raise
+                torch.cuda.empty_cache()
+                if batch > 1:
+                    batch //= 2
+                    log.warning(f"CUDA OOM while encoding; retrying at batch_size={batch}.")
+                    continue
+                # One text at a time still does not fit: the weights and a single
+                # sequence are already more than the card has. The encoder is shared
+                # process-wide, so this moves every engine and every query onto the CPU
+                # — slow, and the alternative is no engine at all.
+                log.warning("CUDA OOM at batch_size=1; moving the encoder to the CPU. "
+                            "Lower EMB_MAX_SEQ_LEN or run on a larger card.")
+                self.model.to("cpu")
+                return self.model.encode(texts, batch_size=batch,
+                                         normalize_embeddings=True, show_progress_bar=False)
 
     def _load_or_build_embeddings(self, rebuild):
         """Vectors for the whole corpus, encoding only the texts the store lacks.
