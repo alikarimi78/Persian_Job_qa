@@ -101,6 +101,24 @@ CAP = {"skills": 7, "knowledge": 8, "abilities": 19, "work_context": 18}
 SOURCE_ONET = "O*NET — ترجمهٔ دوم (بازبینی‌شده)"
 SOURCE_MILITARY = "تولیدی — تکمیل مشاغل نظامی"
 
+# The 76 O*NET residual categories — "Engineers, All Other" and its kind. Two things
+# are wrong with them as the batches leave them. Their titles keep O*NET's inverted
+# list form («مهندسان، سایر»), which is not how the phrase is written in Persian; and
+# the second translation pass rendered "All Other" two different ways, so 68 records
+# say «، سایر» and 8 say «، همه موارد دیگر» for exactly the same thing.
+#
+# A record is residual by its *description* — a 62-character «تمام Xهایی که به طور
+# جداگانه فهرست نشده‌اند» — not by its title, which is what keeps «مونتاژکاران موتور و
+# سایر ماشین‌آلات» and «داوران، قضاوت‌کنندگان و سایر مقامات ورزشی» out of it: those say
+# «سایر» about the work, not about the classification. The title pattern is then
+# required *as well*, which is what excludes «سرپرستان رده اول سایر متخصصان عملیات
+# تاکتیکی» — a real supervisory occupation whose description says "not classified
+# separately" about the specialists it supervises rather than about itself.
+RESIDUAL_DESC = re.compile(r"(به\s*طور\s*جداگانه|به‌طور\s*جداگانه).{0,20}(فهرست|طبقه)")
+RESIDUAL_TAIL = re.compile(
+    r"^(.*)،\s*(?:سایر(?:\s+\S+)*|همه\s+(?:موارد|مشاغل)\s+دیگر)$")
+RESIDUAL_SUFFIX = " (طبقه‌بندی‌نشده)"
+
 LATIN = re.compile(r"[A-Za-z]")
 # «فارسی (English)» — the house style of the batches, and what is unpacked here.
 TITLE_RE = re.compile(r"^(.*?)\s*\(([^()]*[A-Za-z][^()]*)\)\s*$")
@@ -133,6 +151,30 @@ def split_title(title: str) -> tuple[str, str]:
     match = TITLE_RE.match(str(title).strip())
     return (match.group(1).strip(), match.group(2).strip()) if match \
         else (str(title).strip(), "")
+
+
+def rename_residual_titles(frame: pd.DataFrame) -> dict[str, str]:
+    """Rewrites the residual categories' titles in place and returns the mapping.
+
+    `career_path_next` names occupations by their title, so the links have to move with
+    them or `check()`'s "every career path resolves" stops holding — 62 links across 45
+    records point at one of these. Renaming the titles without the links is the one way
+    to get this wrong, and the check is what catches it.
+    """
+    mapping = {}
+    for i in range(len(frame)):
+        title = str(frame.at[i, "job_title"]).strip()
+        if not RESIDUAL_DESC.search(str(frame.at[i, "description"])):
+            continue
+        match = RESIDUAL_TAIL.match(title)
+        if match:
+            mapping[title] = "سایر " + match.group(1).strip() + RESIDUAL_SUFFIX
+        elif title.startswith("سایر "):
+            mapping[title] = title + RESIDUAL_SUFFIX
+    frame["job_title"] = frame.job_title.map(lambda t: mapping.get(str(t).strip(), t))
+    frame["career_path_next"] = frame.career_path_next.map(
+        lambda cell: " | ".join(mapping.get(it, it) for it in items(cell)))
+    return mapping
 
 
 def load_translated(path: Path) -> pd.DataFrame:
@@ -280,8 +322,10 @@ def main() -> int:
     tools = json.loads(Path(args.tools).read_text(encoding="utf-8"))["tools"]
     enrichment = json.loads(Path(args.enrichment).read_text(encoding="utf-8"))["add"]
     onet = load_translated(Path(args.translated))
+    renamed = rename_residual_titles(onet)
     military, missing, unenriched = load_military(existing, tools, enrichment)
     print(f"translated O*NET : {len(onet):5} rows  ({args.translated})")
+    print(f"residual titles  : {len(renamed):5} rewritten as «سایر … (طبقه‌بندی‌نشده)»")
     print(f"military         : {len(military):5} rows  ({existing})")
 
     if missing:

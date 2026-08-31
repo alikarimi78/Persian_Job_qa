@@ -28,7 +28,7 @@ from .messages import (DISCOVERY_NOT_REAL, DISCOVERY_UNAVAILABLE, MATCH_HEADER,
                        OOD_MESSAGE, PROFILE_NONE)
 from .prompts import (SYSTEM_INTERDISCIPLINARY, SYSTEM_JOB_GENERATE, SYSTEM_JOB_MATCH,
                       SYSTEM_PROFILE_ANALYZE, SYSTEM_SINGLE)
-from .ranking import prefer_title_match
+from .ranking import prefer_dense_leader, prefer_title_match
 from .render import (build_context, job_detail, profile_context, render_draft,
                      template_one, template_profile, template_two)
 from .text import normalize_text, parse_json_object
@@ -380,6 +380,11 @@ class JobQAEngine:
         fields = INTENT_TO_FIELDS.get(intent, INTENT_TO_FIELDS["general"])
 
         order, dense, sparse = self._retrieve(q)
+        # Two corrections to the fused order, and the sequence matters: the first
+        # undoes RRF outvoting a clear dense gap, the second lets a title that shares
+        # the question's words beat a marginally denser record. Reversed, the dense
+        # override would simply undo the title tiebreak on every question it fires on.
+        order = prefer_dense_leader(order, dense)
         order = prefer_title_match(q, order, dense, self.titles)
         i1 = order[0]
         s1_dense, s1_sparse = float(dense[i1]), float(sparse[i1])
@@ -397,8 +402,16 @@ class JobQAEngine:
         interdisciplinary, s2_dense = False, None
         if i2 is not None:
             s2_dense = float(dense[i2])
+            # abs(), because `order` is RRF-fused and its leader is not always the
+            # dense leader: RRF compares *ranks*, not margins, so a record BM25 puts
+            # first can carry a lower dense score than the runner-up. Written as
+            # `s1 - s2 <= margin` that gap is negative and the test passes on its own —
+            # which is how «وظایف مهندس راهسازی» came back as an interdisciplinary
+            # answer over «مهندسان، سایر» (0.545) and «مهندسان عمران» (0.592), two jobs
+            # 0.047 apart and in the wrong order. Measured over 158 questions: 7 answers
+            # were interdisciplinary and 5 of them only because this abs() was missing.
             interdisciplinary = (
-                (s2_dense >= SECONDARY_MIN and (s1_dense - s2_dense) <= SECONDARY_MARGIN)
+                (s2_dense >= SECONDARY_MIN and abs(s1_dense - s2_dense) <= SECONDARY_MARGIN)
                 or (explicit and s2_dense >= THRESHOLD_MATCH - 0.05)
             )
 

@@ -28,7 +28,19 @@ jinja2>=3.1
 numpy==1.24.3
 pandas>=2.0
 openpyxl>=3.1
-sentence-transformers>=3.0
+# Pinned, and the pin is about the *tokenizer*, not the API. bge-m3's vectors depend
+# on how the text is tokenized, and tokenizers 0.22 maps ZWNJ (U+200C) to <unk> while
+# 0.23 absorbs it: «مهندس نقشه‌بردار» is [.. 88512, 3, 3979, 4914] under one and
+# [.. 88512, 150599] under the other. Persian is full of ZWNJ — hazm's normalizer
+# *inserts* it — so the two versions embed this corpus into two different spaces, and
+# a vector built under one scores ~0.09 lower against a query encoded under the other.
+# The embedding store keys on EMBED_MODEL_NAME + text and knows nothing about library
+# versions, so an unpinned bump would silently mix both spaces in one file and quietly
+# invalidate every threshold in job_qa_service/config.py. Moving these pins means
+# `POST /admin/rebuild?force_embeddings=true`, exactly as changing EMBED_MODEL_NAME does.
+sentence-transformers==6.0.0
+transformers==5.16.1
+tokenizers==0.23.1
 torch>=2.6,<2.8
 openai>=1.30
 hazm>=0.10

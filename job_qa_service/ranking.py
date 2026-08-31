@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""The question-path title tiebreak.
+"""The two corrections applied to the fused order on the question path.
+
+`prefer_dense_leader` runs first and undoes RRF outvoting a clear dense gap;
+`prefer_title_match` runs second and is the older of the two:
 
 Dense similarity put «خدمه توپخانه و موشک» (0.667) above «افسران توپخانه و موشک»
 (0.650) for «وظایف افسر توپخانه چیست؟» — right unit, wrong rank — and the answer then
@@ -13,8 +16,30 @@ job titles, where this overlap would be noise.
 
 import re
 
-from .config import TITLE_TIEBREAK_DEPTH, TITLE_TIEBREAK_MARGIN, TITLE_TOKEN_MIN
+from .config import (DENSE_LEAD_DEPTH, DENSE_LEAD_MARGIN, TITLE_TIEBREAK_DEPTH,
+                     TITLE_TIEBREAK_MARGIN, TITLE_TOKEN_MIN)
 from .intents import QUESTION_WORDS
+
+
+def prefer_dense_leader(order, dense):
+    """Gives the lead back to a candidate the dense channel clearly prefers.
+
+    `_retrieve` fuses two rankings with RRF, which compares ranks and not margins, so
+    a record that BM25 ranks first leads the fused order even when dense puts it well
+    below the runner-up. That is not a tie to be broken — it is the sparse channel
+    outvoting a semantic gap of DENSE_LEAD_MARGIN or more, and here it happens mostly
+    on the residual «…، سایر» categories, whose alias lists are the query's own word
+    repeated ten times. Called before `prefer_title_match`, never after: the title
+    tiebreak's whole job is to promote a *lower*-dense candidate, and this would undo
+    it. See DENSE_LEAD_MARGIN in config.py for what the margin was measured against.
+    """
+    if len(order) < 2:
+        return order
+    head = order[:DENSE_LEAD_DEPTH + 1]
+    best = max(head, key=lambda i: float(dense[i]))
+    if best == order[0] or float(dense[best]) - float(dense[order[0]]) <= DENSE_LEAD_MARGIN:
+        return order
+    return [best] + [i for i in order if i != best]
 
 
 def content_tokens(text):

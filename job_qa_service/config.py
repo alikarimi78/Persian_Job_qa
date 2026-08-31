@@ -50,9 +50,27 @@ RRF_K = 60
 MAX_CANDIDATES = 15
 SCAN_DEPTH = 5                  # depth searched for a distinct secondary job
 
-# Calibrated for bge-m3 on this dataset (correct ≈ 0.58–0.66, OOD ceiling ≈ 0.36).
+# Recalibrated 2026-08-31 for the retranslated corpus, over 50 out-of-domain probes and
+# 150 questions built from the corpus's own titles:
+#
+#   out-of-domain : max 0.573, p95 0.538, median 0.439   (sparse max 0.272)
+#   legitimate    : min 0.599, p5  0.652, median 0.709
+#
+# The two ranges no longer overlap, which the old corpus's «correct ≈ 0.58–0.66, OOD
+# ceiling ≈ 0.36» did not promise — but **the gap is a mirage and 0.54 is a trap**. The
+# 150 questions are «وظایف <exact title> چیست؟», the easiest shape there is; a real
+# question phrased in the user's own words lands far lower. «مهندسی راهسازی» measures
+# 0.520 against «مهندسان حمل و نقل», which is the right answer, so any gate above 0.52
+# reintroduces the out-of-domain refusal this was raised to fix. 0.50 buys 3 fewer
+# wrong acceptances out of 50 at no cost to either set and keeps 0.02 of headroom over
+# that real low-water mark; 0.51 would leave 0.01.
+#
+# Several of those "wrong acceptances" are also not wrong. A corpus of 1118 occupations
+# covers most of human activity, so «چگونه عکاسی یاد بگیرم؟» reaching «عکاسان» (0.573)
+# is the system working. Read the count as an upper bound on the failures, not as one.
+#
 # Changing EMBED_MODEL_NAME invalidates every threshold below.
-THRESHOLD_MATCH  = 0.49         # dense out-of-domain gate
+THRESHOLD_MATCH  = 0.50         # dense out-of-domain gate
 THRESHOLD_SPARSE = 0.15         # sparse out-of-domain gate
 SECONDARY_MIN    = 0.50         # min dense score of the 2nd job (interdisciplinary)
 SECONDARY_MARGIN = 0.01         # max gap between 1st and 2nd job
@@ -92,6 +110,24 @@ PROFILE_TOKEN_MIN    = 4        # below this a token is an affix or stopword, as
 # When the leaders are this close, a title that actually shares a content word with
 # the question is the better bet. Applied only in the question path: the discovery
 # path matches a description of duties against titles, where the overlap is noise.
+# Dense-leader override, applied *before* the title tiebreak below. `_retrieve` fuses
+# the dense and sparse rankings with RRF, and RRF compares **ranks, not margins**: a
+# record BM25 puts first can lead the fused order while carrying a clearly lower dense
+# score than the runner-up. The 77 O*NET residual categories are what make that common
+# here — «مهندسان، سایر» describes nothing (a 62-character «all engineers not listed
+# separately») but stuffs ten «مهندس …» aliases and twenty «مهندسان …» career links
+# into its text, so BM25 ranks it first for any «مهندس X» question. It led
+# «وظایف مهندس راهسازی» at dense 0.545 over «مهندسان عمران» at 0.592.
+#
+# Measured over 150 questions built from the corpus's own titles: 144/150 correct with
+# no override, **149/150 at this margin**, 147/150 at 0.05 — five leaders changed and
+# every one of them changed to the right record. Out-of-domain behaviour is untouched
+# (the same 1 of 8 probes leaks either way). It runs before `prefer_title_match` so the
+# title tiebreak still has the last word — that one exists precisely to promote a
+# *lower*-dense candidate, and would be undone by a dense override running after it.
+DENSE_LEAD_MARGIN = 0.03        # dense advantage that lets a runner-up take the lead
+DENSE_LEAD_DEPTH  = 5           # how deep in the fused order to look for one
+
 TITLE_TIEBREAK_MARGIN = 0.05    # dense gap within which titles may break the tie
 TITLE_TIEBREAK_DEPTH  = 4       # how deep to look for a better-titled candidate
 TITLE_TOKEN_MIN       = 4       # below this a token is an affix or stopword, not content
