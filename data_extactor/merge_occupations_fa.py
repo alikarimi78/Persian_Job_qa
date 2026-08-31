@@ -100,6 +100,11 @@ CAP = {"skills": 7, "knowledge": 8, "abilities": 19, "work_context": 18}
 
 SOURCE_ONET = "O*NET — ترجمهٔ دوم (بازبینی‌شده)"
 SOURCE_MILITARY = "تولیدی — تکمیل مشاغل نظامی"
+SOURCE_AUTHORED = "تولیدی — مشاغل فناوری اطلاعات"
+
+# The four columns that are a fixed O*NET taxonomy shared by every record, and so the
+# four an authored row may not write freely in. See `check_vocabulary`.
+TAXONOMY_COLUMNS = ["skills", "knowledge", "abilities", "work_context"]
 
 # The 76 O*NET residual categories — "Engineers, All Other" and its kind. Two things
 # are wrong with them as the batches leave them. Their titles keep O*NET's inverted
@@ -237,6 +242,52 @@ def load_military(path: Path, tools: dict[str, str],
     return pd.DataFrame(rows), sorted(set(missing)), unenriched
 
 
+def load_authored(path: Path) -> pd.DataFrame:
+    """Occupations written by hand because O*NET has no row for them.
+
+    A third input beside the translated batches and the military rows, and it exists for
+    the same reason they do: the corpus has to hold the job somebody will search for. The
+    O*NET classification predates the split every Persian job posting now makes — سمت
+    سرور against سمت کاربر — and «Software Developers» does not stand in for it. What the
+    gap cost was retrieval: «برنامه‌نویس بک‌اند» ranked «برنامه‌نویسان ابزار کنترل عددی
+    کامپیوتری» first at dense 0.614, a CNC machine-tool occupation that wins on nothing
+    but a title holding «برنامه‌نویسان» and «کامپیوتری» at once.
+
+    Kept in JSON rather than typed into the xlsx, because the xlsx is *output*: this
+    script rewrites it from its inputs on every run, and a row added to the sheet by hand
+    would survive exactly until the next one.
+    """
+    data = json.loads(path.read_text(encoding="utf-8"))
+    rows = [{"job_code": "", **{c: str(row.get(c, "")).strip() for c in COLUMNS},
+             "source": data.get("source", SOURCE_AUTHORED)}
+            for row in data["occupations"]]
+    return pd.DataFrame(rows, columns=["job_code"] + COLUMNS + ["source"])
+
+
+def check_vocabulary(frame: pd.DataFrame, canonical: Path) -> list[str]:
+    """Authored rows must describe themselves in the corpus's own words.
+
+    `skills`, `knowledge`, `abilities` and `work_context` are fixed O*NET taxonomies —
+    10 / 33 / 52 / 55 phrases that all 1016 translated rows draw on — and
+    `job_qa_service/profile.py` scores a user's items by token containment against those
+    cells. A phrase written fresh here would be an item no profile could match and no
+    other record shares, which is the thing `translation_fixes/40_taxonomy_canonical.json`
+    exists to prevent. The same check `merge_fixes/build_military_enrichment.py` runs
+    before it writes, applied to the one other place a human writes into these columns.
+    """
+    table = json.loads(canonical.read_text(encoding="utf-8"))["canonical"]
+    allowed = {column: set(table[column].values()) for column in TAXONOMY_COLUMNS}
+    problems = []
+    for i in range(len(frame)):
+        row = frame.iloc[i]
+        for column in TAXONOMY_COLUMNS:
+            stray = [it for it in items(row[column]) if it not in allowed[column]]
+            if stray:
+                problems.append(f"«{row['job_title']}» {column}: {len(stray)} phrase(s) "
+                                f"outside the canonical taxonomy: {stray}")
+    return problems
+
+
 def check(frame: pd.DataFrame) -> list[str]:
     """Everything that would make this file wrong to seed from."""
     problems = []
@@ -261,16 +312,18 @@ def check(frame: pd.DataFrame) -> list[str]:
         problems.append(f"{len(repeated)} cells hold the same item twice: {repeated[:5]}")
     # Every O*NET career path must name a record this corpus holds — those items are
     # occupation titles and `repair_batch_fa.py` writes each one exactly as its own row
-    # reads. The military rows are not held to it: their next roles were written as
+    # reads. The authored rows are held to it as well, and that is most of the point of
+    # checking at all: their links are typed by hand against a corpus of 1118 titles, and
+    # a mistyped one is invisible until somebody follows it. The military rows are not: their next roles were written as
     # generic aspirations («افسر ارتباطات») rather than as links, none of them resolved
     # in the previous corpus either, and fuzzy-matching them onto real records produces
     # confident nonsense — «افسر ارتباطات» lands on «افسران ضداطلاعات».
     titles = set(frame.job_title)
-    onet = frame[frame.source == SOURCE_ONET]
-    unresolved = sorted({it for cell in onet.career_path_next
+    linked = frame[frame.source.isin([SOURCE_ONET, SOURCE_AUTHORED])]
+    unresolved = sorted({it for cell in linked.career_path_next
                          for it in items(cell) if it not in titles})
     if unresolved:
-        problems.append(f"{len(unresolved)} O*NET career_path_next links name no "
+        problems.append(f"{len(unresolved)} career_path_next links name no "
                         f"record: {unresolved[:5]}")
     return problems
 
@@ -305,6 +358,10 @@ def main() -> int:
     ap.add_argument("--tools", default=str(HERE / "merge_fixes" / "military_tools_fa.json"))
     ap.add_argument("--enrichment",
                     default=str(HERE / "merge_fixes" / "military_enrichment.json"))
+    ap.add_argument("--authored",
+                    default=str(HERE / "merge_fixes" / "authored_occupations_fa.json"))
+    ap.add_argument("--canonical",
+                    default=str(HERE / "translation_fixes" / "40_taxonomy_canonical.json"))
     ap.add_argument("--out", default=str(ROOT / "Merged_Occupations.xlsx"))
     ap.add_argument("--backup", default=str(HERE / "Merged_Occupations_v1.xlsx"))
     ap.add_argument("--dry-run", action="store_true")
@@ -324,9 +381,11 @@ def main() -> int:
     onet = load_translated(Path(args.translated))
     renamed = rename_residual_titles(onet)
     military, missing, unenriched = load_military(existing, tools, enrichment)
+    authored = load_authored(Path(args.authored))
     print(f"translated O*NET : {len(onet):5} rows  ({args.translated})")
     print(f"residual titles  : {len(renamed):5} rewritten as «سایر … (طبقه‌بندی‌نشده)»")
     print(f"military         : {len(military):5} rows  ({existing})")
+    print(f"authored         : {len(authored):5} rows  ({args.authored})")
 
     if missing:
         print(f"\nerror: {len(missing)} military tool terms have no translation:",
@@ -342,18 +401,18 @@ def main() -> int:
             print(f"  {title}", file=sys.stderr)
         return 1
 
-    merged = pd.concat([onet, military], ignore_index=True)
+    merged = pd.concat([onet, military, authored], ignore_index=True)
     merged.insert(0, "row_index", range(len(merged)))
     merged = merged[OUT_COLUMNS]
 
-    problems = check(merged)
+    problems = check(merged) + check_vocabulary(authored, Path(args.canonical))
     print("\n--- checks ---")
     if problems:
         for line in problems:
             print(f"  FAIL  {line}")
     else:
         print("  no empty cell, no '|' in a prose column, no duplicate title, "
-              "every career path resolves")
+              "every career path resolves,\n  every authored taxonomy phrase is canonical")
 
     english_titles = merged.index[merged.job_title.map(lambda t: bool(LATIN.search(t)))]
     print(f"\n{len(merged)} rows; {len(english_titles)} titles still carry Latin text")

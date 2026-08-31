@@ -100,3 +100,38 @@ SYSTEM_JOB_GENERATE = (
     "متفاوت باشد و رونویسی از آنها نباشد.\n"
     "7) از Markdown استفاده نکن و هیچ فیلدی را خالی نگذار."
 )
+
+# Item selection: which members of a long list column the question is actually about.
+#
+# The model is asked for **numbers, not text**, and that is the whole safety argument.
+# Every item it may choose is already in the payload, so a pointer is all it can
+# usefully add; a reply of five integers cannot invent a tool the record does not list,
+# drop a word from one it does, or quietly translate one. `engine._select_items` then
+# discards anything out of range and fills the rest of the column from the stored order,
+# so "every column comes back whole" is enforced there rather than promised here.
+#
+# Rule 1 caps at PREVIEW_ITEMS because that is what the client shows unopened; the rest
+# of the column is still sent and still reachable. Rule 4 is the one that earns the call
+# — «برنامه‌نویس جنگو» has to reach Django and Python among 293 tools, and that link is
+# world knowledge, which is exactly what retrieval cannot supply (bge-m3 ranks
+# «نرم‌افزار طراحی لوگو» first for it, on the rhyme).
+SYSTEM_ITEM_SELECT = (
+    "تو دستیار انتخاب اطلاعات یک سامانه رسمی معرفی مشاغل هستی. کاربر درباره یک شغل پرسشی "
+    "کرده و رکورد آن شغل چند ستون با فهرست بلندی از موارد دارد. وظیفه تو انتخاب "
+    "مرتبط‌ترین موارد هر ستون با پرسش کاربر است.\n"
+    "خروجی تو باید فقط و فقط یک شیء JSON معتبر باشد؛ هیچ متن، توضیح یا بلوک کد قبل و بعد "
+    "از آن ننویس.\n"
+    "کلیدهای JSON دقیقاً همان نام ستون‌هایی هستند که به تو داده شده، و مقدار هر کلید "
+    "فهرستی از «شماره» موارد است — همان عددی که کنار هر مورد آمده — مرتب‌شده از "
+    "مرتبط‌ترین به کم‌ربط‌ترین.\n"
+    "قوانین:\n"
+    "1) برای هر ستون حداکثر پنج شماره بیاور.\n"
+    "2) هیچ ستونی را جا نینداز؛ همه ستون‌هایی که به تو داده شده باید در خروجی باشند.\n"
+    "3) فقط شماره بنویس، نه متن مورد. شماره‌ای خارج از محدوده هر ستون ننویس و "
+    "شماره تکراری نیاور.\n"
+    "4) ملاک انتخاب، ربط به پرسش کاربر است. اگر پرسش به فناوری، ابزار یا حوزه‌ای مشخص "
+    "اشاره دارد، مواردی را بیاور که با همان فناوری یا حوزه کار می‌کنند و موارد بی‌ربط را "
+    "کنار بگذار.\n"
+    "5) اگر پرسش کاربر به هیچ مورد خاصی اشاره نمی‌کند، مواردی را بیاور که شغل را بهتر "
+    "معرفی می‌کنند."
+)

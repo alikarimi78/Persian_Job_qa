@@ -83,6 +83,18 @@ DISCOVERY_MATCH   = 0.60        # >= this: an existing job already covers the re
 DISCOVERY_FLOOR   = 0.35        # < this (and sparse weak too): out of domain, do not invent
 DISCOVERY_RELATED = 3           # neighbouring jobs shown to the user / fed to the generator
 
+# How many items of a list column the client shows before the reader asks for the rest.
+# A record is 121 items at the median and 532 at the largest — a page of chips nobody
+# reads — and five per column brings that to ~40. Nothing is hidden from the *payload*:
+# every item is still sent and `preview` only says where the client's own toggle cuts,
+# so opening a column costs no request and the PDF report still prints all of it.
+PREVIEW_ITEMS = 5
+
+# The reply to the item-selection call is at most three columns of five integers, so
+# this is generous. It is not a quality knob: a truncated reply simply fails to parse
+# and the column keeps the order the dataset stored.
+SELECT_MAX_TOKENS = 300
+
 # Advanced search (profile analysis). A different question from the two above: not
 # "what is this job" or "invent me one", but "which of the 1116 records fits the
 # capabilities I listed". Two independent signals, deliberately kept apart until the

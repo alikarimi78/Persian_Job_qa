@@ -42,6 +42,30 @@ DISCOVERY_FIELDS = ["description", "responsibilities", "skills", "knowledge", "a
 # one. Derived from DISCOVERY_FIELDS so adding a content column reaches both.
 DETAIL_FIELDS = DISCOVERY_FIELDS + ["aliases"]
 
+# The list columns whose stored order carries no information — the only ones there is
+# anything to gain by ranking against a question.
+#
+# The other four are already ranked, by O*NET rather than by us.
+# `data_extactor/aggrigation_script_for_jobs.py` extracts `skills`, `knowledge`,
+# `abilities` and `work_context` under a scale filter and sorts them by the survey's own
+# rating (`df.sort_values("Data Value", ascending=False)`, with `sort_items = False` so
+# the dedup keeps that order), which the translation passes preserved item for item. So
+# the first five items of those columns *are* the five that matter most to the
+# occupation, measured rather than guessed, and nothing an LLM or an embedding could
+# say about them would be an improvement. The corpus confirms it: no pair of common
+# items keeps a consistent relative order across records, which alphabetical order
+# would — 0 of 45 pairs in `skills`, 0 of 91 in `abilities`.
+#
+# These three were extracted with no scale, so `dedup_keep_order` sorted them
+# alphabetically instead (`tools` keeps the source file's order, which the Persian
+# prefixes added in translation have since scrambled). «Django» sits at position 47 of
+# the 293 tools of «برنامه‌نویسان کامپیوتر» for no reason whatever, and that is the
+# order this list exists to replace.
+#
+# `aliases` is left out although it is alphabetical too: it holds a job's other names,
+# ten at the median, and no name is a better answer to a question than another.
+RANKED_FIELDS = ["tools", "responsibilities", "career_path_next"]
+
 # The discovery path has no intent to key the boxes on — the user described a job
 # instead of asking about one facet of it — so the profile leads with the two fields
 # that introduce a job and the rest of the record rides along behind them.

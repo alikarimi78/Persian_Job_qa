@@ -5,6 +5,7 @@ import logging
 import re
 import threading
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -13,24 +14,24 @@ from sentence_transformers import SentenceTransformer
 from . import profile as profile_match
 from .bm25 import BM25
 from .columns import (DISCOVERY_FIELDS, DISCOVERY_PRIMARY, EXPECTED_COLUMNS,
-                      FIELD_LABELS, PROSE_COLUMNS)
+                      FIELD_LABELS, PROSE_COLUMNS, RANKED_FIELDS)
 from .config import (DISCOVERY_FLOOR, DISCOVERY_MATCH, DISCOVERY_RELATED,
                      EMB_BATCH_SIZE, EMB_MAX_SEQ_LEN, EMBED_MODEL_NAME,
-                     MAX_CANDIDATES, PAIR_SIM_MAX, PROFILE_DENSE_ONLY,
+                     MAX_CANDIDATES, PAIR_SIM_MAX, PREVIEW_ITEMS, PROFILE_DENSE_ONLY,
                      PROFILE_TOP_N, PROFILE_W_COVER, PROFILE_W_DENSE, RRF_K, SCAN_DEPTH,
-                     SECONDARY_MARGIN, SECONDARY_MIN, THRESHOLD_MATCH, THRESHOLD_SPARSE,
-                     W_FULL, W_TITLE)
+                     SECONDARY_MARGIN, SECONDARY_MIN, SELECT_MAX_TOKENS, THRESHOLD_MATCH,
+                     THRESHOLD_SPARSE, W_FULL, W_TITLE)
 from .emb_store import store
 from .intents import (EXPLICIT_COMBO_WORDS, INTENT_TO_FIELDS, QUESTION_WORDS,
                       detect_intent, is_job_request)
 from .llm import LLMClient
 from .messages import (DISCOVERY_NOT_REAL, DISCOVERY_UNAVAILABLE, MATCH_HEADER,
                        OOD_MESSAGE, PROFILE_NONE)
-from .prompts import (SYSTEM_INTERDISCIPLINARY, SYSTEM_JOB_GENERATE, SYSTEM_JOB_MATCH,
-                      SYSTEM_PROFILE_ANALYZE, SYSTEM_SINGLE)
+from .prompts import (SYSTEM_INTERDISCIPLINARY, SYSTEM_ITEM_SELECT, SYSTEM_JOB_GENERATE,
+                      SYSTEM_JOB_MATCH, SYSTEM_PROFILE_ANALYZE, SYSTEM_SINGLE)
 from .ranking import prefer_dense_leader, prefer_title_match
-from .render import (build_context, job_detail, profile_context, render_draft,
-                     template_one, template_profile, template_two)
+from .render import (build_context, field_items, job_detail, profile_context,
+                     render_draft, template_one, template_profile, template_two)
 from .text import normalize_text, parse_json_object
 
 try:
@@ -52,6 +53,32 @@ except Exception:
 NOT_A_JOB = object()
 
 log = logging.getLogger("job_qa_service")
+
+
+def _reorder(items, picks):
+    """`items` with the ones `picks` names first and the rest behind them, in order.
+
+    `picks` is whatever the model returned for one column, so every value is checked
+    rather than trusted: an index outside the column, a repeat, a string, a null, a
+    list that is not a list. What survives leads; everything else follows in the order
+    the dataset stored. The result is therefore always a permutation of `items` and
+    never shorter than it, which is the property `job_detail` re-checks by length and
+    the reason a bad reply costs nothing but the order it would have improved.
+    """
+    lead, seen = [], set()
+    for pick in picks if isinstance(picks, list) else []:
+        if len(lead) == PREVIEW_ITEMS:
+            break
+        try:
+            index = int(pick)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= index < len(items) and index not in seen:
+            seen.add(index)
+            lead.append(index)
+    return ([items[i] for i in lead]
+            + [item for n, item in enumerate(items) if n not in seen])
+
 
 _MODEL_CACHE = {}
 _MODEL_LOCK = threading.Lock()
@@ -247,18 +274,18 @@ class JobQAEngine:
 
         if s1_dense >= DISCOVERY_MATCH:
             row = self.df.iloc[i1]
-            ans = self.llm([
+            ans, (picks,) = self._answer_and_select([
                 {"role": "system", "content": SYSTEM_JOB_MATCH},
                 {"role": "user", "content":
                     f"اطلاعات شغل:\n{build_context(row, DISCOVERY_FIELDS)}\n\n"
                     f"توصیف کاربر: {question}"},
-            ]) if use_llm else ""
+            ], question, [row], use_llm)
             if not ans:
                 ans = f"{MATCH_HEADER}\n\n{template_one(row, DISCOVERY_FIELDS)}"
             return {"mode": "job_match", "intent": "job_request",
                     "job": row["job_title"], "score": s1_dense,
                     "related_jobs": related, "answer": ans,
-                    "details": [job_detail(row, DISCOVERY_PRIMARY)]}
+                    "details": [job_detail(row, DISCOVERY_PRIMARY, picks)]}
 
         draft = self._generate_job(question, order[:DISCOVERY_RELATED]) if use_llm else None
         if draft is NOT_A_JOB:
@@ -280,6 +307,67 @@ class JobQAEngine:
                 "job_draft": draft, "related_jobs": related,
                 "answer": render_draft(draft, related),
                 "details": [job_detail(draft, DISCOVERY_PRIMARY)]}
+
+    # ---------- item selection ----------
+    def _select_items(self, question, row):
+        """Which members of this record's long columns the question is actually about.
+
+        Returns `{field: [item, ...]}` — each column *whole*, with the items the model
+        judged relevant first — or `{}`, which means "leave every column as the dataset
+        stored it". Only `columns.RANKED_FIELDS` are offered, and only where the column
+        holds more items than the client shows unopened: the four taxonomy columns
+        arrive in O*NET's own importance order and there is nothing here that could
+        improve on that, and a column of five has nothing to choose between.
+
+        The model answers with **indices**, never with text, so it can point at an item
+        but cannot write one — see SYSTEM_ITEM_SELECT. Everything it returns is checked
+        in `_reorder`, and like every other call in this engine the failure path is the
+        useful one: no API key, a refused request, unparseable JSON and an empty reply
+        all end at `{}`, which is exactly what the boxes looked like before this
+        existed.
+        """
+        columns = {}
+        for field in RANKED_FIELDS:
+            items = field_items(field, str(row.get(field, "") or "").strip())
+            if len(items) > PREVIEW_ITEMS:
+                columns[field] = items
+        if not columns:
+            return {}
+
+        listing = "\n\n".join(
+            f"### {field}\n" + "\n".join(f"{n}. {item}" for n, item in enumerate(items))
+            for field, items in columns.items())
+        raw = self.llm([
+            {"role": "system", "content": SYSTEM_ITEM_SELECT},
+            {"role": "user", "content":
+                f"پرسش کاربر: {question}\n\n"
+                f"عنوان شغل: {row['job_title']}\n\n{listing}"},
+        ], temperature=0, max_tokens=SELECT_MAX_TOKENS, clean=False)
+
+        picked = parse_json_object(raw)
+        if picked is None:
+            return {}
+        return {field: _reorder(items, picked.get(field))
+                for field, items in columns.items()}
+
+    def _answer_and_select(self, messages, question, rows, use_llm, **kwargs):
+        """The answer prose and one item selection per record, asked for at once.
+
+        The two calls are independent — the selection reads the record's own columns
+        and never the prose — so running them in sequence would add the whole of the
+        second to every /search. Measured on the dev machine: 1.95 s for the answer
+        alone and 2.79 s for the answer and one selection together, against the ~4.3 s
+        the two cost one after the other.
+
+        Returns the answer text (`""` if the API gave nothing, as the callers' template
+        fallbacks expect) and one `{field: [item, ...]}` per row, in the rows' order.
+        """
+        if not use_llm:
+            return "", [{}] * len(rows)
+        with ThreadPoolExecutor(max_workers=1 + len(rows)) as pool:
+            answer = pool.submit(self.llm, messages, **kwargs)
+            picks = [pool.submit(self._select_items, question, row) for row in rows]
+            return answer.result(), [pick.result() for pick in picks]
 
     # ---------- public API ----------
     def analyze(self, profile, use_llm=True):
@@ -361,7 +449,10 @@ class JobQAEngine:
         intent, answer, plus job/score fields depending on mode. Every mode but
         out_of_domain also carries 'details': the matched record(s) column by column
         (see render.job_detail), with the columns the answer was written from flagged
-        'primary'. 'job_generated' is an offer the user still has to accept; it carries
+        'primary' and each column carrying the whole of itself plus a 'preview' count
+        of how much of it is worth showing unopened. The columns whose stored order
+        says nothing are re-ordered against this question first (_select_items), in the
+        same round trip as the answer. 'job_generated' is an offer the user still has to accept; it carries
         'job_draft', the proposed record in the dataset's own columns, for the client
         to prefill its form with."""
         q = normalize_text(question)
@@ -419,26 +510,27 @@ class JobQAEngine:
 
         if interdisciplinary:
             row2 = self.df.iloc[i2]
-            ans = self.llm([
+            ans, (picks1, picks2) = self._answer_and_select([
                 {"role": "system", "content": SYSTEM_INTERDISCIPLINARY},
                 {"role": "user", "content":
                     f"شغل اول:\n{build_context(row1, fields)}\n\n"
                     f"شغل دوم:\n{build_context(row2, fields)}\n\nسوال کاربر: {question}"},
-            ]) if use_llm else ""
+            ], question, [row1, row2], use_llm)
             if not ans:
                 ans = template_two(row1, row2, fields)
             return {"mode": "interdisciplinary", "intent": intent,
                     "jobs": [row1["job_title"], row2["job_title"]],
                     "scores": [s1_dense, s2_dense], "answer": ans,
-                    "details": [job_detail(row1, fields), job_detail(row2, fields)]}
+                    "details": [job_detail(row1, fields, picks1),
+                                job_detail(row2, fields, picks2)]}
 
-        ans = self.llm([
+        ans, (picks,) = self._answer_and_select([
             {"role": "system", "content": SYSTEM_SINGLE},
             {"role": "user", "content":
                 f"اطلاعات شغل:\n{build_context(row1, fields)}\n\nسوال کاربر: {question}"},
-        ]) if use_llm else ""
+        ], question, [row1], use_llm)
         if not ans:
             ans = template_one(row1, fields)
         return {"mode": "single", "intent": intent, "job": row1["job_title"],
                 "score": s1_dense, "answer": ans,
-                "details": [job_detail(row1, fields)]}
+                "details": [job_detail(row1, fields, picks)]}

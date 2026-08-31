@@ -3,6 +3,7 @@
 used whenever the API gives nothing back, and the per-field `details` payload."""
 
 from .columns import (DETAIL_FIELDS, EMPTY_CELLS, FIELD_LABELS, PROSE_COLUMNS)
+from .config import PREVIEW_ITEMS
 from .messages import (DRAFT_HEADER, DRAFT_QUESTION, PROFILE_COVER_LABEL, PROFILE_HEADER,
                        PROFILE_MISSING_LABEL, RELATED_LABEL)
 
@@ -89,7 +90,7 @@ def field_items(field, value):
             if p.strip() and p.strip() not in EMPTY_CELLS]
 
 
-def job_detail(row, primary_fields):
+def job_detail(row, primary_fields, order=None):
     """The record's own columns, structured for the client to render as one box per
     field beside the generated prose. The answer text stays the answer; this is the
     data it was written from, so a user who asked about tools can still open the
@@ -97,19 +98,38 @@ def job_detail(row, primary_fields):
 
     `primary_fields` are the columns the answer actually used — INTENT_TO_FIELDS for
     a question, DISCOVERY_PRIMARY for a described job — and they are flagged and
-    sorted first so the client can show those boxes open and fold the rest away.
+    sorted first so the client leads with the right field.
 
-    Per field: `items` is a list column split apart (empty for prose), and `value` is
-    always display-ready text — prose verbatim, a list joined with «،» so a client
-    that ignores `items` never shows the raw «|» separator.
+    `order` is `{field: [item, ...]}` from `engine._select_items`: the same items, the
+    ones this particular question is about first. Only `columns.RANKED_FIELDS` ever
+    appear in it, and a column it does not name keeps the order the dataset stored —
+    which for the four taxonomies is O*NET's own importance ranking and is already the
+    right answer. It is a *reordering* and never a filter: `preview` is what decides
+    how much the client shows unopened, so the whole column travels either way and the
+    PDF report, which prints every column whole, is untouched by any of this.
+
+    Per field: `items` is a list column split apart (empty for prose), `value` is
+    always display-ready text — prose verbatim, a list re-joined with «،» so a client
+    that ignores `items` never shows the raw «|» — and `preview` is how many items to
+    show before the reader asks for the rest.
     """
     primary = set(primary_fields)
+    order = order or {}
     fields = []
     for key in DETAIL_FIELDS:
         value = str(row.get(key, "") or "").strip()
         if value in EMPTY_CELLS:
             continue
         items = field_items(key, value)
+        chosen = order.get(key)
+        # Length is the cheap proof that the selection is still a permutation of this
+        # column. `_select_items` builds it from these same items, so a mismatch means
+        # the two have come apart — a stale `order`, a row that is not the one it was
+        # built from — and the stored order is the right thing to fall back to. The
+        # invariant being defended is that nothing is ever dropped: `preview` hides the
+        # tail, and a reorder that lost an item would delete data instead.
+        if chosen and len(chosen) == len(items):
+            items = chosen
         if key not in PROSE_COLUMNS and not items:      # a list of nothing but «-»
             continue
         fields.append({
@@ -118,6 +138,7 @@ def job_detail(row, primary_fields):
             "value": "، ".join(items) if items else value,
             "items": items,
             "primary": key in primary,
+            "preview": min(PREVIEW_ITEMS, len(items)),
         })
     fields.sort(key=lambda f: not f["primary"])          # stable: primary first, order kept
     return {"job_title": str(row.get("job_title", "") or "").strip(), "fields": fields}

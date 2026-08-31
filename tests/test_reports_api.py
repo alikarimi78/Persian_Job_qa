@@ -176,6 +176,21 @@ def test_emoji_never_reaches_the_document():
 
 
 # ---------- the payload is untrusted, and bounded ----------
+def test_a_preview_carrying_payload_still_prints_every_item(as_user, world):
+    """`/search` gained a `preview` on every field and the client posts the answer back
+    verbatim, so this payload now carries a key `ReportIn` never declared. It has to be
+    ignored rather than refused — a 422 here would break the PDF button the moment the
+    two repos were deployed together — and the report must go on printing the *whole*
+    column, since `preview` is only where the screen folds and a report is read away
+    from the screen."""
+    body = payload()
+    for box in body["details"][0]["fields"]:
+        box["preview"] = 1                      # the screen would have shown one item
+    html = build_html(ReportIn(**body), Caller(), "org-a", "unit-a1")
+    assert "فرماندهی خدمه توپخانه." in html
+    assert "نظارت بر آموزش پرسنل." in html      # the item the screen folded away
+
+
 def test_oversized_answer_is_refused(as_user, world):
     """The body is the caller's own answer coming back, but nothing proves this server
     wrote it — so the size of what a download can be made to render is capped."""

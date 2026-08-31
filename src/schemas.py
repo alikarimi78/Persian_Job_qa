@@ -277,16 +277,26 @@ class SearchIn(BaseModel):
 class JobFieldOut(BaseModel):
     """One dataset column of a matched record, ready to render as its own box.
 
-    `items` is a list column split on its «|» separators and is empty for the three
+    `items` is a list column split on its «|» separators and is empty for the two
     prose columns; `value` is display-ready either way (prose verbatim, a list joined
     with «،»). `primary` marks the columns the answer text was actually written from —
-    what the question's intent asked for — so a client can open those and fold the rest.
+    what the question's intent asked for — so a client leads with those.
+
+    `preview` is how many items to show before the reader asks for the rest. The whole
+    column is always here: a record runs to 121 items at the median and 532 at the
+    largest, which is more than anyone reads, but which of them matters is the reader's
+    call and not ours — so the client slices at `preview` and its toggle costs no
+    second request. The order the slice takes is not arbitrary either: `skills`,
+    `knowledge`, `abilities` and `work_context` arrive in O*NET's own importance order,
+    and `job_qa_service/columns.py:RANKED_FIELDS` are re-ordered against the question
+    itself (see `engine._select_items`).
     """
     key: str
     label: str
     value: str
     items: list[str] = []
     primary: bool = False
+    preview: int = 0
 
 
 class JobDetailOut(BaseModel):
