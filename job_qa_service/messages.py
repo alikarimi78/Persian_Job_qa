@@ -10,8 +10,11 @@ because the API did.
 OOD_MESSAGE = "متاسفانه در پایگاه داده سامانه، اطلاعاتی درباره این موضوع یافت نشد."
 
 MATCH_HEADER = "بر اساس ویژگی‌هایی که توصیف کرده‌اید، این شغل در پایگاه داده موجود است:"
-DRAFT_HEADER = ("شغلی که دقیقاً منطبق بر توصیف شما باشد در پایگاه داده موجود نیست؛ "
-                "بر اساس ویژگی‌های اعلام‌شده، شغل زیر پیشنهاد می‌شود:")
+# Reached from two places now — a described spec and a typed job name — so the wording
+# says «what you entered» rather than «the features you listed»: on the second path the
+# user stated no features at all, only a title.
+DRAFT_HEADER = ("شغلی منطبق بر آنچه وارد کرده‌اید در پایگاه داده موجود نیست؛ "
+                "بر اساس ورودی شما، شغل زیر پیشنهاد می‌شود:")
 DRAFT_QUESTION = ("در صورت تمایل می‌توانید مشخصات این شغل را در فرم زیر بررسی و در صورت نیاز "
                   "ویرایش نمایید و سپس ثبت کنید؛ ثبت نهایی پس از تایید مدیر سامانه انجام "
                   "می‌شود.")

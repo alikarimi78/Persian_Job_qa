@@ -17,13 +17,13 @@ from .columns import (DISCOVERY_FIELDS, DISCOVERY_PRIMARY, EXPECTED_COLUMNS,
                       FIELD_LABELS, PROSE_COLUMNS, RANKED_FIELDS)
 from .config import (DISCOVERY_FLOOR, DISCOVERY_MATCH, DISCOVERY_RELATED,
                      EMB_BATCH_SIZE, EMB_MAX_SEQ_LEN, EMBED_MODEL_NAME,
-                     MAX_CANDIDATES, PAIR_SIM_MAX, PREVIEW_ITEMS, PROFILE_DENSE_ONLY,
-                     PROFILE_TOP_N, PROFILE_W_COVER, PROFILE_W_DENSE, RRF_K, SCAN_DEPTH,
-                     SECONDARY_MARGIN, SECONDARY_MIN, SELECT_MAX_TOKENS, THRESHOLD_MATCH,
-                     THRESHOLD_SPARSE, W_FULL, W_TITLE)
+                     MAX_CANDIDATES, NAMED_JOB_SPARSE, PAIR_SIM_MAX, PREVIEW_ITEMS,
+                     PROFILE_DENSE_ONLY, PROFILE_TOP_N, PROFILE_W_COVER, PROFILE_W_DENSE,
+                     RRF_K, SCAN_DEPTH, SECONDARY_MARGIN, SECONDARY_MIN, SELECT_MAX_TOKENS,
+                     THRESHOLD_MATCH, THRESHOLD_SPARSE, W_FULL, W_TITLE)
 from .emb_store import store
-from .intents import (EXPLICIT_COMBO_WORDS, INTENT_TO_FIELDS, QUESTION_WORDS,
-                      detect_intent, is_job_request)
+from .intents import (EXPLICIT_COMBO_WORDS, INTENT_TO_FIELDS, detect_intent,
+                      is_bare_name, is_job_request, names_an_occupation)
 from .llm import LLMClient
 from .messages import (DISCOVERY_NOT_REAL, DISCOVERY_UNAVAILABLE, MATCH_HEADER,
                        OOD_MESSAGE, PROFILE_NONE)
@@ -260,9 +260,18 @@ class JobQAEngine:
             draft[col] = re.sub(r"\s*\|\s*", "، ", draft[col]).strip("، ")
         return draft if draft["job_title"] else None
 
-    def _discover(self, question, q_norm, use_llm=True):
-        """Job-request path: return a close existing job, or design a new one."""
-        order, dense, sparse = self._retrieve(q_norm)
+    def _discover(self, question, q_norm, use_llm=True, retrieved=None):
+        """Job-request path: return a close existing job, or design a new one.
+
+        `retrieved` is the question path handing over the retrieval it has already
+        paid for, when it decides mid-way that the input names a job the corpus does
+        not hold (see `answer`). Its order carries the two corrections `ranking`
+        applies, which is right here for that caller and only for it: the corrections
+        compare the query against *titles*, which is noise against a described spec
+        and exactly the point against a typed job name."""
+        if retrieved is None:
+            retrieved = self._retrieve(q_norm)
+        order, dense, sparse = retrieved
         i1 = order[0]
         s1_dense, s1_sparse = float(dense[i1]), float(sparse[i1])
         related = [self.df.iloc[i]["job_title"] for i in order[:DISCOVERY_RELATED]]
@@ -454,7 +463,10 @@ class JobQAEngine:
         says nothing are re-ordered against this question first (_select_items), in the
         same round trip as the answer. 'job_generated' is an offer the user still has to accept; it carries
         'job_draft', the proposed record in the dataset's own columns, for the client
-        to prefill its form with."""
+        to prefill its form with. It is reached two ways — from a sentence about
+        wanting a job (`is_job_request`, before retrieval) and from a bare job name
+        the corpus turns out not to hold (after it) — and both go through
+        `_discover`, so the offer is the same offer."""
         q = normalize_text(question)
 
         # A described spec is a different task from a question about a known job
@@ -464,9 +476,8 @@ class JobQAEngine:
         intent = detect_intent(q)
 
         # Bare job names ("معلم جغرافیا") carry no question verb -> description request
-        tokens = set(q.split())
-        is_question = ("؟" in q) or ("?" in q) or bool(tokens & QUESTION_WORDS)
-        if intent == "general" and len(tokens) <= 4 and not is_question:
+        bare_name = is_bare_name(q)
+        if bare_name:
             intent = "description"
         fields = INTENT_TO_FIELDS.get(intent, INTENT_TO_FIELDS["general"])
 
@@ -479,6 +490,20 @@ class JobQAEngine:
         order = prefer_title_match(q, order, dense, self.titles)
         i1 = order[0]
         s1_dense, s1_sparse = float(dense[i1]), float(sparse[i1])
+
+        # The user named a job and the corpus does not hold it. That is a request to
+        # create one, not a question to answer from whatever ranked first: the record
+        # that did rank first is unrelated, and describing it is how «مدیر فصلنامه»
+        # came back as an answer reading «اطلاعات کافی در این مورد موجود نیست» sitting
+        # on top of every column of «مدیران علوم طبیعی». `names_an_occupation` is what
+        # keeps «کیک شکلاتی» out of the moderation queue — it scores in the same band,
+        # and only the vocabulary says one of the two was never about work.
+        # `_discover` still refuses below its own floor and still asks the model
+        # whether the thing is a real occupation at all, so nothing here can invent a
+        # record on its own.
+        if (bare_name and s1_dense < THRESHOLD_MATCH and s1_sparse < NAMED_JOB_SPARSE
+                and names_an_occupation(q)):
+            return self._discover(question, q, use_llm, (order, dense, sparse))
 
         # Out-of-domain only if BOTH channels are weak
         if s1_dense < THRESHOLD_MATCH and s1_sparse < THRESHOLD_SPARSE:

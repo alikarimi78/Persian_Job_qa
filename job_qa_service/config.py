@@ -71,7 +71,25 @@ SCAN_DEPTH = 5                  # depth searched for a distinct secondary job
 #
 # Changing EMBED_MODEL_NAME invalidates every threshold below.
 THRESHOLD_MATCH  = 0.50         # dense out-of-domain gate
-THRESHOLD_SPARSE = 0.15         # sparse out-of-domain gate
+# Raised from 0.15 on 2026-09-01. The out-of-domain test is «both channels weak», so
+# this number is not a gate but an *escape hatch*: it decides how strong a lexical
+# match has to be before it answers from a record the dense channel has already
+# disowned. At 0.15 a single shared word cleared it, and the answers that came out the
+# other side are the ones users report — «تاریخ ایران» (sparse 0.245) described as
+# «مدرسان تاریخ», «کیک شکلاتی» (0.190) as «نانوایان», «تربیت اژدها» (0.258) answered
+# from «متخصصان تربیت بدنی تطبیقی» with «اطلاعات کافی در این مورد موجود نیست» printed
+# over the record's own columns. The calibration above is the same fact from the other
+# side: **the 50 out-of-domain probes reach 0.272 of sparse**, so at 0.15 this hatch
+# stood open to most of them, and 0.30 is the first round number above that ceiling.
+#
+# Measured over 930 questions built from the corpus's own *aliases* — a harder shape
+# than the exact-title questions above, and the only one where this hatch can matter:
+# 601 lead with the record they were built from, and just 10 of those score below
+# THRESHOLD_MATCH at all. Of the 601, moving the hatch refuses 1 at 0.25, **2 at
+# 0.30**, 4 at 0.35 and 6 at 0.40. 0.30 costs one question over 0.25 (an alias that is
+# an English word) and buys back the «تربیت اژدها» class, which is what it is for.
+# Above 0.35 real answers start going, so that is the ceiling.
+THRESHOLD_SPARSE = 0.30         # sparse out-of-domain gate
 SECONDARY_MIN    = 0.50         # min dense score of the 2nd job (interdisciplinary)
 SECONDARY_MARGIN = 0.01         # max gap between 1st and 2nd job
 PAIR_SIM_MAX     = 0.85         # above this, two jobs are near-duplicates -> single mode
@@ -82,6 +100,34 @@ PAIR_SIM_MAX     = 0.85         # above this, two jobs are near-duplicates -> si
 DISCOVERY_MATCH   = 0.60        # >= this: an existing job already covers the request
 DISCOVERY_FLOOR   = 0.35        # < this (and sparse weak too): out of domain, do not invent
 DISCOVERY_RELATED = 3           # neighbouring jobs shown to the user / fed to the generator
+
+# A named job the corpus does not hold (2026-09-01). Someone who types «مدیر فصلنامه»
+# has described a job as surely as someone who writes a sentence about one, so the
+# same offer to create it applies — the only difference is that the question path has
+# already retrieved, and its own leader is the evidence. The dense line is
+# THRESHOLD_MATCH itself, deliberately: that constant *is* «the corpus holds an answer
+# to this», and below it the question path was only ever going to describe a record
+# the user did not ask about.
+#
+# The sparse bar is its own constant, and deliberately looser than THRESHOLD_SPARSE:
+# this route has something better than a refusal to offer, so it is worth reaching
+# further for. «متصدی دفتر پیشخوان دولت» carries 0.327 of sparse and clears the general
+# hatch — and is then answered from «کارگران فست فود و پیشخوان», on the one shared word
+# «پیشخوان». Measured over 50 realistic bare names of jobs the corpus does hold and 17
+# it does not:
+#
+#   in corpus     dense min 0.427, p5 0.516, median 0.609   sparse p25 0.473, median 0.650
+#   not in corpus dense max 0.568, median 0.485             sparse max 0.327, median 0.155
+#
+# The dense ranges overlap between 0.50 and 0.57, so 0.50 is the ceiling and not a
+# choice: at 0.52 «مهندسی راهسازی» (0.517, and the documented reason THRESHOLD_MATCH
+# is where it is) and «خبرنگار» (0.518) would be offered as new records instead of
+# answered from «مهندسان حمل و نقل» and «تحلیلگران اخبار…». At 0.50 with this sparse
+# bar: 0 of the 50 diverted, 9 of the 17 caught, both spellings of the reported case
+# among them. 0.40 sits just under the in-corpus sparse p25 — a lexical match at least
+# as strong as the weakest quarter of real lookups is what it takes to answer from a
+# record the dense channel has already disowned.
+NAMED_JOB_SPARSE = 0.40
 
 # How many items of a list column the client shows before the reader asks for the rest.
 # A record is 121 items at the median and 532 at the largest — a page of chips nobody

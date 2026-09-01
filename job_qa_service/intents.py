@@ -98,3 +98,112 @@ def is_job_request(question):
     if any(k in question for k in JOB_REQUEST_KEYWORDS):
         return True
     return any(p.search(question) for p in _JOB_REQUEST_RE)
+
+
+# ---------------------------------------------------------------------------
+# Is the input a *job name* and nothing else?
+#
+# Two questions again, and the second one is new. `is_bare_name` is the old inline
+# test from `engine.answer`: a short input with no question in it is somebody typing
+# an occupation rather than asking about one, and it is answered as a request for a
+# description. `names_an_occupation` is what the *creation* route needs on top of it:
+# a bare input that the corpus cannot answer is offered as a new record, and «کیک
+# شکلاتی» and «تاریخ ایران» are two tokens each with no question mark and score in
+# exactly the band a genuinely missing job scores in — retrieval cannot separate them,
+# because neither is in the corpus and both are near something that is.
+#
+# What separates them is the head of the phrase. Persian names an occupation either
+# with one of a small closed set of agent nouns («مدیر فصلنامه», «کارشناس امور
+# ایثارگران») or with an agentive suffix on a noun («ریخته‌گر», «نگهبان», «قالی‌باف»).
+# A topic, an object or a greeting has neither, and the honest answer to those is
+# still «not in the database» rather than a generated record in the moderation queue.
+BARE_NAME_MAX_TOKENS = 4
+
+# Matched as a prefix, so one entry covers the plural and the -ی forms at once:
+# «مدیر» reaches «مدیران» and «مدیریت», «کارشناس» reaches «کارشناسان».
+OCCUPATION_HEADS = (
+    "مدیر", "سرپرست", "رئیس", "معاون", "مسئول", "متصدی", "کارشناس", "کارمند", "کارگر",
+    "مامور", "مأمور", "افسر", "فرمانده", "بازرس", "ناظر", "مشاور", "مربی", "معلم",
+    "مدرس", "استاد", "محقق", "دانشمند", "طراح", "مهندس", "تکنسین", "اپراتور", "متخصص",
+    "دستیار", "منشی", "حسابرس", "وکیل", "قاضی", "پزشک", "پرستار", "جراح", "مترجم",
+    "ویراستار", "نویسنده", "سردبیر", "عکاس", "خواننده", "نوازنده", "آشپز", "نانوا",
+    "قصاب", "خیاط", "راننده", "ملوان", "فروشنده", "بازاریاب", "معمار", "مکانیک",
+    "نجار", "نصاب", "صیاد", "خدمه", "بهیار", "ماما", "مبلغ", "روحانی", "طلبه", "مداح",
+    "خادم", "قاری", "رزمنده", "کارآموز", "کارورز", "خلبان", "نماینده", "تاجر",
+    # Military ranks: the customer is a government body and the corpus carries 102
+    # military occupations, so «سروان» is as likely an input here as «حسابدار».
+    "سرباز", "سرهنگ", "سروان", "ستوان", "سرگرد", "سرتیپ", "ناخدا", "امیر", "تیمسار",
+)
+
+# The productive half. A stem shorter than this is not a noun being turned into an
+# agent noun — «زبان» is «بان» on one letter, «دیگر» is «گر» on two, «مقدار» is «دار»
+# on two — and each of those would otherwise read as an occupation.
+_AGENTIVE_STEM_MIN = 3
+_AGENTIVE_SUFFIXES = ("گر", "بان", "کار", "چی", "دار", "شناس", "ساز", "نویس", "فروش",
+                      "نگار", "پزشک", "ورز", "باف", "کش", "کننده", "دهنده", "دان",
+                      "یست", "گذار", "گزار", "پرور")
+
+# Both the word and its singular are tried, because the plural hides the suffix: the
+# corpus writes «تحلیلگران» and «برنامه‌نویسان», where the «گر» and the «نویس» are no
+# longer at the end of the word. Stripping first would not do — «نگهبان» *ends* in
+# «ان» without being a plural, and «نگهب» is nothing at all.
+_PLURALS = (("گان", "ه"), ("های", ""), ("ها", ""), ("ان", ""))
+
+# The ordinary words the suffix rule over-reaches on. Each is a noun that happens to
+# end in an agentive suffix on a long enough stem, so no length guard separates them:
+# «خیابان» is «بان» on four letters exactly as «نگهبان» is on three. Listing the few
+# that are common enough to be typed is cheaper than weakening a rule that is right
+# everywhere else.
+_NOT_OCCUPATIONS = frozenset((
+    "خیابان", "بیابان", "سازمان", "آشکار", "افکار", "انکار", "نمودار", "پدیدار",
+    "بدهکار", "طلبکار", "پیشکش", "سرکش", "قارچی", "تماشاچی", "شکار", "نگار", "خاندان",
+))
+
+_PUNCT = "؟?.،,:;!\"'«»()[]"
+
+
+def _tokens(question):
+    return [t.strip(_PUNCT) for t in question.split() if t.strip(_PUNCT)]
+
+
+def _forms(word):
+    """The word, and its singular if it reads as a plural. Both are looked at because
+    only one of the two ever carries the suffix — see `_PLURALS`."""
+    for plural, restore in _PLURALS:
+        if word.endswith(plural) and len(word) - len(plural) >= _AGENTIVE_STEM_MIN:
+            return word, word[:-len(plural)] + restore
+    return (word,)
+
+
+def is_bare_name(question):
+    """True when the input is a job name rather than a question about one.
+
+    «معلم جغرافیا» carries no question verb and no question mark, so it is a request
+    to be told about that occupation. Expects normalize_text output."""
+    tokens = _tokens(question)
+    if not tokens or len(set(tokens)) > BARE_NAME_MAX_TOKENS:
+        return False
+    if "؟" in question or "?" in question:
+        return False
+    if set(tokens) & QUESTION_WORDS:
+        return False
+    return detect_intent(question) == "general"
+
+
+def names_an_occupation(question):
+    """True when some word in the input is the head of an occupation title.
+
+    Deliberately a vocabulary test and not a score: it is asked only of inputs the
+    corpus could not answer, where the score has already said «nothing here» and the
+    remaining question is whether that silence is a gap in the dataset or an input
+    that was never about work."""
+    for token in _tokens(question):
+        if any(token.startswith(head) for head in OCCUPATION_HEADS):
+            return True
+        for word in _forms(token.replace("\u200c", "")):
+            if word in _NOT_OCCUPATIONS:
+                continue
+            if any(word.endswith(s) and len(word) - len(s) >= _AGENTIVE_STEM_MIN
+                   for s in _AGENTIVE_SUFFIXES):
+                return True
+    return False
