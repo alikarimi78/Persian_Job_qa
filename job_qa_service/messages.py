@@ -9,6 +9,29 @@ because the API did.
 
 OOD_MESSAGE = "متاسفانه در پایگاه داده سامانه، اطلاعاتی درباره این موضوع یافت نشد."
 
+# Asked about itself rather than about an occupation — «کار تو چیه؟», «هدف شما چیست؟».
+# There is no record that answers that, so before this text existed the question was
+# answered from whichever record its two content words happened to point at. It says
+# what the service does and what may be asked of it, because that is what the person
+# is actually after: they are looking for the way in, not for a job description.
+ABOUT_MESSAGE = (
+    "من دستیار تحلیل مشاغل این سامانه هستم و تنها به پرسش‌های مرتبط با مشاغل پاسخ می‌دهم.\n\n"
+    "آنچه می‌توانید از این سامانه بخواهید:\n"
+    "- پرسش درباره یک شغل مشخص: وظایف، مهارت‌ها، دانش، توانایی‌ها، ابزارها، محیط کاری و "
+    "مسیر ارتقای آن. برای نمونه: «وظایف افسر توپخانه چیست؟»\n"
+    "- جست‌وجوی پیشرفته: مهارت‌ها و توانمندی‌های خود را وارد نمایید تا نزدیک‌ترین مشاغل "
+    "به پروفایل شما رتبه‌بندی و میزان هم‌خوانی هر مورد مشخص شود.\n"
+    "- شغلی که در پایگاه داده موجود نیست: آن را توصیف نمایید تا شغلی متناسب با آن پیشنهاد "
+    "شود؛ پس از بررسی و ثبت شما، برای تایید به مدیر سامانه ارسال می‌گردد.\n\n"
+    "پرسش خود را درباره شغل مورد نظر وارد نمایید."
+)
+
+# A greeting is the same question asked with no question in it — the person is looking
+# for the way in. It answers with the greeting returned and then the *same* body, built
+# by concatenation rather than written twice: whoever edits what this service says about
+# itself should not have to find two copies of it.
+GREETING_MESSAGE = "با سلام و احترام؛ در خدمت شما هستم.\n\n" + ABOUT_MESSAGE
+
 MATCH_HEADER = "بر اساس ویژگی‌هایی که توصیف کرده‌اید، این شغل در پایگاه داده موجود است:"
 # Reached from two places now — a described spec and a typed job name — so the wording
 # says «what you entered» rather than «the features you listed»: on the second path the

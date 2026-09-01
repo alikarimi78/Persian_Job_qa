@@ -23,10 +23,11 @@ from .config import (DISCOVERY_FLOOR, DISCOVERY_MATCH, DISCOVERY_RELATED,
                      THRESHOLD_MATCH, THRESHOLD_SPARSE, W_FULL, W_TITLE)
 from .emb_store import store
 from .intents import (EXPLICIT_COMBO_WORDS, INTENT_TO_FIELDS, detect_intent,
-                      is_bare_name, is_job_request, names_an_occupation)
+                      is_about_system, is_bare_name, is_greeting, is_job_request,
+                      names_an_occupation)
 from .llm import LLMClient
-from .messages import (DISCOVERY_NOT_REAL, DISCOVERY_UNAVAILABLE, MATCH_HEADER,
-                       OOD_MESSAGE, PROFILE_NONE)
+from .messages import (ABOUT_MESSAGE, DISCOVERY_NOT_REAL, DISCOVERY_UNAVAILABLE,
+                       GREETING_MESSAGE, MATCH_HEADER, OOD_MESSAGE, PROFILE_NONE)
 from .prompts import (SYSTEM_INTERDISCIPLINARY, SYSTEM_ITEM_SELECT, SYSTEM_JOB_GENERATE,
                       SYSTEM_JOB_MATCH, SYSTEM_PROFILE_ANALYZE, SYSTEM_SINGLE)
 from .ranking import prefer_dense_leader, prefer_title_match
@@ -454,9 +455,12 @@ class JobQAEngine:
 
     def answer(self, question, use_llm=True):
         """Answers one question. Returns a dict with keys:
-        mode ('single'|'interdisciplinary'|'job_match'|'job_generated'|'out_of_domain'),
-        intent, answer, plus job/score fields depending on mode. Every mode but
-        out_of_domain also carries 'details': the matched record(s) column by column
+        mode ('single'|'interdisciplinary'|'job_match'|'job_generated'|'about'|
+        'out_of_domain'), intent, answer, plus job/score fields depending on mode.
+        'about' is the one mode decided before retrieval and carrying nothing but fixed
+        text: the question was about this assistant rather than about an occupation
+        ('about'), or was a greeting and no question at all ('greeting').
+        Every mode but it and out_of_domain also carries 'details': the matched record(s) column by column
         (see render.job_detail), with the columns the answer was written from flagged
         'primary' and each column carrying the whole of itself plus a 'preview' count
         of how much of it is worth showing unopened. The columns whose stored order
@@ -472,6 +476,20 @@ class JobQAEngine:
         # A described spec is a different task from a question about a known job
         if is_job_request(q):
             return self._discover(question, q, use_llm)
+
+        # ...and a question about the assistant is not a question about a job at all.
+        # Nothing downstream can improve on this answer: there is no record that holds
+        # it, so retrieval only ever ranked something unrelated first. It sits *after*
+        # the job request on purpose — «یک شغل خوب معرفی کنید» addresses the assistant
+        # too, and the offer it asks for beats a description of what the assistant does.
+        if is_about_system(q):
+            return {"mode": "about", "intent": "about", "answer": ABOUT_MESSAGE}
+
+        # A greeting is the same question with no question in it. Same mode and the same
+        # text under a greeting of its own — the intent is what tells the two apart in a
+        # log. It has to be the *whole* input: «سلام، وظایف پرستار چیست؟» is a question.
+        if is_greeting(q):
+            return {"mode": "about", "intent": "greeting", "answer": GREETING_MESSAGE}
 
         intent = detect_intent(q)
 

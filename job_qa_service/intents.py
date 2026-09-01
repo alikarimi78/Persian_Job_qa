@@ -207,3 +207,148 @@ def names_an_occupation(question):
                    for s in _AGENTIVE_SUFFIXES):
                 return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Is the input a question about *this assistant*?
+#
+# «کار تو چیه؟» and «هدف شما چیست؟» are not questions about an occupation, and no
+# record answers them — but retrieval always ranks something first, so a three-word
+# question lands wherever its two content words happen to point. Measured before this
+# test existed: «کار شما چیست؟» scored 0.536 against «متخصصان روابط کار» and was
+# answered as a description of that occupation, «چه کاری انجام می‌دهی؟» 0.535 against
+# «نمایش‌دهندگان و تبلیغ‌کنندگان محصول», «چطور کار می‌کنی؟» 0.522 against «جوشکاران».
+# The ones that stayed under the gate answered OOD_MESSAGE, which is not wrong but
+# reads as the system failing at the first thing many people type into it.
+#
+# A vocabulary test rather than a score, for the same reason `names_an_occupation` is
+# one: the question is not about the corpus at all, so no threshold over the corpus can
+# separate it. **Two halves have to be present** — who is being asked («تو», «شما», a
+# second-person verb, «این سامانه») and what is being asked about them («کار», «هدف»,
+# «اسم», «چیست») — because each half on its own is ordinary Persian: «هدف شغل مشاور
+# چیست؟» carries the second and is a question about an occupation.
+BARE_SYSTEM_MAX_TOKENS = 8
+
+# Who is being addressed. Whole tokens, never substrings: «تو» sits inside «توانایی»,
+# «تولید» and «توپخانه», and the corpus is full of all three. Both spellings of the
+# verb prefix are listed for the same reason JOB_REQUEST_KEYWORDS lists both.
+SYSTEM_ADDRESSEES = frozenset((
+    "تو", "شما", "خودت", "خودتان", "خودتو", "خودتون", "تورا", "تورو", "شمارا",
+    "هستی", "هستید", "هستین", "کیستی", "بلدی", "بلدید", "داری", "دارید",
+    "می‌کنی", "میکنی", "می‌کنید", "میکنید", "می‌توانی", "می‌تونی", "میتونی",
+    "می‌توانید", "می‌تونید", "میتونید", "می‌دهی", "میدهی", "میدی", "می‌دهید", "میدید",
+))
+
+# The same half, written as a phrase instead of a pronoun. «این» is required: the corpus
+# holds «خدمه سامانه‌های موشکی پدافند هوایی», and a bare «سامانه» would take every
+# question about one with it.
+SYSTEM_SELF_PHRASES = ("این سامانه", "این سایت", "این برنامه", "این سیستم",
+                       "این ربات", "این دستیار", "این هوش مصنوعی")
+
+# What is being asked about it. Enumerated rather than prefix-matched, which is what
+# OCCUPATION_HEADS can afford and this cannot: «کی» as a prefix reaches «کیفیت» and
+# «نام» reaches «نامه», and either one plus a «شما» would swallow a real question.
+SYSTEM_TOPICS = frozenset((
+    "کار", "کاری", "کارها", "کارهایی", "چیکار", "چیکاره",
+    "وظیفه", "وظایف", "هدف", "هدفی", "کاربرد", "فایده", "معرفی",
+    "اسم", "نام", "امکانات", "امکاناتی", "قابلیت", "قابلیت‌ها", "قابلیتی",
+    "وظیفه‌ای", "کمک", "کمکی",
+    "مدل", "مدلی", "سازنده", "ساخته",
+    "کی", "کیست", "کیه", "چی", "چیست", "چیه", "چیستی",
+))
+
+# Both halves in one word — the second-person enclitic is the addressee. «کارت» is also
+# the Persian for a card, which is the one wrong reading here and costs a person asking
+# about «کارت ملی» a paragraph explaining what this service does.
+SYSTEM_TOPICS_SELF = frozenset((
+    "کارت", "کارتان", "کارتون", "کارات", "وظیفت", "وظیفه‌ات", "وظایفت", "وظایفتان",
+    "هدفت", "هدفتان", "هدفتون", "اسمت", "اسمتان", "اسمتون", "نامت", "نامتان",
+    "کاربردت", "سازندت", "سازنده‌ات",
+))
+
+# What the two halves miss. Each carries its own second person, so none of them widens
+# the test to inputs that are not addressed to the assistant.
+SYSTEM_QUESTION_KEYWORDS = (
+    "هوش مصنوعی هستی", "هوش مصنوعی هستید", "ربات هستی", "چت‌بات هستی", "چت بات هستی",
+    "انسان هستی", "آدم هستی", "چیکاره‌ای", "چیکاره ای",
+    "خودت را معرفی", "خودتان را معرفی", "خودت رو معرفی", "خودتو معرفی",
+    "چه کمکی می‌توانی", "چه کمکی میتونی", "چه کمکی می‌کنی",
+    "چه کاری بلدی", "چه کارهایی بلدی",
+)
+
+
+def is_about_system(question):
+    """True when the input asks about this assistant rather than about an occupation.
+
+    Expects normalize_text output. Asked **after** `is_job_request`, never before: a
+    sentence like «یک شغل خوب معرفی کنید» addresses the assistant too, and the offer it
+    asks for is a better answer than a description of what the assistant does.
+
+    A question that names an occupation is never one of these, whatever else it says.
+    That veto is the whole of what keeps «هدف شغل مشاور چیست؟» and «کار یک حسابدار
+    چیست؟» — both of which carry a topic word — on the path that answers them."""
+    tokens = _tokens(question)
+    if not tokens or len(tokens) > BARE_SYSTEM_MAX_TOKENS:
+        return False
+    if names_an_occupation(question):
+        return False
+    if any(k in question for k in SYSTEM_QUESTION_KEYWORDS):
+        return True
+    words = set(tokens)
+    if words & SYSTEM_TOPICS_SELF:
+        return True
+    addressed = (bool(words & SYSTEM_ADDRESSEES)
+                 or any(p in question for p in SYSTEM_SELF_PHRASES))
+    return addressed and bool(words & SYSTEM_TOPICS)
+
+
+# ---------------------------------------------------------------------------
+# Is the input a greeting and nothing else?
+#
+# «سلام» reaches the corpus like any other text and lands on whatever it happens to be
+# nearest — measured 0.478 against «غربالگران امنیتی حمل و نقل» — and answers
+# OOD_MESSAGE, which tells someone who has just said hello that the database holds no
+# information about it. The reply is the same one `is_about_system` earns: a person who
+# opens with a greeting and nothing else is looking for the way in.
+#
+# **The greeting has to be the whole input**, which is what separates «سلام» from
+# «سلام، وظایف پرستار چیست؟» — a question that merely opens with one, and that must go
+# on being answered. So the phrases are removed from the text and what is left has to be
+# nothing but the words a greeting is padded with. That subtraction is also what makes
+# the substring match safe: «سلام» is inside «سلامت» and «اسلام», «درود» is inside
+# «درودگر», and in each case what remains after the cut is not a filler.
+GREETING_MAX_TOKENS = 5
+
+# **Sorted longest first**, because the phrases nest and each one is cut out of the text
+# in turn: «سلام» taken out of «السلام علیکم» leaves «ال», and «خوبی» out of «خوبید»
+# leaves «د» — neither is a filler, so both greetings would be refused by the very rule
+# that makes the match safe. Longest first, each is consumed whole.
+GREETING_PHRASES = tuple(sorted((
+    "سلام", "السلام", "علیکم", "درود", "وقت بخیر", "وقت به خیر", "روز بخیر",
+    "صبح بخیر", "عصر بخیر", "شب بخیر", "خسته نباشید", "چه خبر",
+    "خوبی", "خوبید", "خوبین", "چطوری", "چطورید", "چطورین", "چطوره",
+    "حال شما چطور", "حالت چطوره", "حالتون چطوره", "حالتان چطور",
+    "hi", "hey", "hello",
+), key=len, reverse=True))
+
+# What a greeting is padded with, and nothing else. Anything outside this list means the
+# input carries a question as well, and the question is what gets answered.
+GREETING_FILLERS = frozenset((
+    "با", "و", "عرض", "ادب", "احترام", "خدمت", "بر", "شما", "دوست", "من", "عزیز",
+    "آقا", "خانم", "ببخشید", "لطفا", "لطفاً", "سپاس", "است", "هستم",
+))
+
+
+def is_greeting(question):
+    """True when the input is a greeting and carries no question with it.
+
+    Expects normalize_text output."""
+    tokens = _tokens(question)
+    if not tokens or len(tokens) > GREETING_MAX_TOKENS:
+        return False
+    rest, greeted = question, False
+    for phrase in GREETING_PHRASES:
+        if phrase in rest:
+            greeted = True
+            rest = rest.replace(phrase, " ")
+    return greeted and not set(_tokens(rest)) - GREETING_FILLERS

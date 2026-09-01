@@ -313,8 +313,10 @@ class SearchOut(BaseModel):
     score: float | None = None
     scores: list[float] | None = None
     # The record(s) the answer came from, column by column. One entry for every mode
-    # but out_of_domain; two for 'interdisciplinary'. The prose in `answer` stays the
-    # answer — this is the underlying data, shown alongside it rather than instead of it.
+    # but out_of_domain and 'about'; two for 'interdisciplinary'. The prose in `answer`
+    # stays the answer — this is the underlying data, shown alongside it rather than
+    # instead of it. ('about' is the engine answering a question about *itself*, which
+    # no record holds: fixed text and nothing else.)
     details: list[JobDetailOut] | None = None
     # job-request modes: nearest existing titles, and (when mode == 'job_generated')
     # the proposed record in JobIn's shape. The answer asks the user to confirm it;
