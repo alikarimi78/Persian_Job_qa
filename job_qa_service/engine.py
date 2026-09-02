@@ -30,7 +30,7 @@ from .messages import (ABOUT_MESSAGE, DISCOVERY_NOT_REAL, DISCOVERY_UNAVAILABLE,
                        GREETING_MESSAGE, MATCH_HEADER, OOD_MESSAGE, PROFILE_NONE)
 from .prompts import (SYSTEM_INTERDISCIPLINARY, SYSTEM_ITEM_SELECT, SYSTEM_JOB_GENERATE,
                       SYSTEM_JOB_MATCH, SYSTEM_PROFILE_ANALYZE, SYSTEM_SINGLE)
-from .ranking import prefer_dense_leader, prefer_title_match
+from .ranking import prefer_contained_title, prefer_dense_leader, prefer_title_match
 from .render import (build_context, field_items, job_detail, profile_context,
                      render_draft, template_one, template_profile, template_two)
 from .text import normalize_text, parse_json_object
@@ -247,7 +247,7 @@ class JobQAEngine:
             {"role": "user", "content":
                 f"درخواست کاربر:\n{question}\n\n"
                 f"مشاغل مشابه موجود (فقط برای الگوی سبک نگارش و پرهیز از تکرار):\n{reference}"},
-        ], temperature=0.5, max_tokens=900, clean=False)
+        ], temperature=0.5, max_tokens=900, clean=False, json_object=True)
 
         obj = parse_json_object(raw)
         if obj is None:
@@ -352,7 +352,7 @@ class JobQAEngine:
             {"role": "user", "content":
                 f"پرسش کاربر: {question}\n\n"
                 f"عنوان شغل: {row['job_title']}\n\n{listing}"},
-        ], temperature=0, max_tokens=SELECT_MAX_TOKENS, clean=False)
+        ], temperature=0, max_tokens=SELECT_MAX_TOKENS, clean=False, json_object=True)
 
         picked = parse_json_object(raw)
         if picked is None:
@@ -500,12 +500,15 @@ class JobQAEngine:
         fields = INTENT_TO_FIELDS.get(intent, INTENT_TO_FIELDS["general"])
 
         order, dense, sparse = self._retrieve(q)
-        # Two corrections to the fused order, and the sequence matters: the first
+        # Three corrections to the fused order, and the sequence matters: the first
         # undoes RRF outvoting a clear dense gap, the second lets a title that shares
-        # the question's words beat a marginally denser record. Reversed, the dense
-        # override would simply undo the title tiebreak on every question it fires on.
+        # the question's words beat a marginally denser record — reversed, the dense
+        # override would simply undo the title tiebreak on every question it fires on —
+        # and the third puts a record whose full title the question spells out above
+        # everything, which is why it has the last word.
         order = prefer_dense_leader(order, dense)
         order = prefer_title_match(q, order, dense, self.titles)
+        order = prefer_contained_title(q, order, self.titles)
         i1 = order[0]
         s1_dense, s1_sparse = float(dense[i1]), float(sparse[i1])
 

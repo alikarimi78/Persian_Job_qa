@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""The two corrections applied to the fused order on the question path.
+"""The three corrections applied to the fused order on the question path.
 
 `prefer_dense_leader` runs first and undoes RRF outvoting a clear dense gap;
-`prefer_title_match` runs second and is the older of the two:
+`prefer_title_match` runs second and is the oldest of the three;
+`prefer_contained_title` runs last and outranks both, because it fires only on the
+strongest evidence a query can carry — the record's own full title, written out:
 
 Dense similarity put «خدمه توپخانه و موشک» (0.667) above «افسران توپخانه و موشک»
 (0.650) for «وظایف افسر توپخانه چیست؟» — right unit, wrong rank — and the answer then
@@ -55,6 +57,65 @@ def title_overlap(q_tokens, title):
     t_tokens = content_tokens(title)
     return sum(any(tt.startswith(qt) or qt.startswith(tt) for tt in t_tokens)
                for qt in q_tokens)
+
+
+# Whole tokens, for the exact-title test below. Split on the same separators a title
+# can carry — «لوله‌کش‌ها، لوله‌کش‌های صنعتی و بخار» holds a «،» of its own — so the
+# title and the question tokenize identically and the comparison is token to token.
+_WORD_SPLIT = re.compile(r"[\s،؛:؟?!.,«»()\[\]/|\-–]+")
+
+
+def _words(text):
+    return [w for w in _WORD_SPLIT.split(text) if w]
+
+
+def prefer_contained_title(q_norm, order, titles):
+    """Puts the record whose **entire title** is written inside the question first.
+
+    «وظایف حسابداران و حسابرسان چیست؟» names its record verbatim and still answered
+    from «بازرسان مالی» (dense 0.640): near-sibling records — the residual categories,
+    the assistants-to-X rows, the same family at two seniorities — sit close enough in
+    both channels that the exact-titled record loses the fused order, and the two
+    corrections above cannot always give it back (`prefer_title_match` only looks
+    TITLE_TIEBREAK_DEPTH deep and within its margin). Measured over 150 sampled
+    records per seed before this existed: 3+6 of 300 title questions and 4+6 of 300
+    bare titles answered from a sibling of the record they spell out.
+
+    The test is deliberately **exact and parameterless** — the title's tokens must
+    appear as a contiguous run of the question's tokens, so there is no threshold to
+    calibrate and no way for it to fire on a question that merely shares words with a
+    title. «وظایف افسر توپخانه چیست؟» does not contain «افسران توپخانه و موشک» and is
+    untouched. Of several contained titles the longest wins (most tokens, then most
+    characters). Runs after the other two corrections and overrides them, since the
+    user typing the record's own name outranks anything a score can say; a record the
+    candidate list does not even hold is inserted at the front rather than lost.
+
+    **A one-token title never fires it.** A single word inside a question is just a
+    word, not a name being spelled out: the corpus holds «پیاده‌نظام», and «وظایف افسر
+    پیاده‌نظام چیست؟» contains it whole — promoting it took the question away from
+    «افسران پیاده‌نظام», the record it was answering correctly, in both measured
+    samples. Every sibling-confusion case this rule exists for carried a multi-word
+    title, so two tokens is where containment starts meaning something.
+
+    The scan tokenizes every title per call (~1120 short strings, ~2 ms) — noise next
+    to the encode that precedes it, so no per-engine cache is kept for it.
+    """
+    q_words = _words(q_norm)
+    if not q_words:
+        return order
+    best = None  # (token count, char count, index)
+    for idx, title in enumerate(titles):
+        t_words = _words(title)
+        n = len(t_words)
+        if n < 2 or n > len(q_words):
+            continue
+        if any(q_words[k:k + n] == t_words for k in range(len(q_words) - n + 1)):
+            key = (n, len(title), idx)
+            if best is None or key[:2] > best[:2]:
+                best = key
+    if best is None or best[2] == order[0]:
+        return order
+    return [best[2]] + [i for i in order if i != best[2]]
 
 
 def prefer_title_match(q_norm, order, dense, titles):
