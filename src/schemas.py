@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 from typing import Annotated
 
 from pydantic import (BaseModel, Field, ConfigDict, StringConstraints, computed_field,
@@ -486,6 +487,11 @@ class JobOut(JobIn):
     id: int
     status: str
     suggested_by: int | None
+    # When the row was last written. Nothing sorts by it; it is the one column that says
+    # whether a record has been corrected since it was admitted to the corpus, which is
+    # the question the editing panel is opened with. It costs nothing to send — Prisma
+    # stamps it with @updatedAt and every read already returns every scalar.
+    updated_at: datetime | None = None
 
 
 # JobOut borrows JobIn's ten columns for their names and types, but must not inherit its
@@ -501,6 +507,25 @@ class JobOut(JobIn):
 for _column in JobIn.model_fields:
     JobOut.model_fields[_column].metadata = []
 JobOut.model_rebuild(force=True)
+
+
+# Declared after that rebuild, so `items` is built against the JobOut the loop above
+# finished with rather than against the one that still carried JobIn's input rules.
+class JobPage(BaseModel):
+    """One page of the corpus, for the panel that edits it.
+
+    The rows are **whole records**, not summaries: at ~4.5 KB of text each a page of
+    twenty is ~90 KB, and sending them complete is what lets the editor open on the row
+    the table already holds — no second request, no loading state inside the dialog.
+
+    `total` is the count **after** the filter rather than the size of the corpus. It is
+    what decides how many pages there are, and a search narrowing 1118 records to three
+    has to narrow the pager with them.
+    """
+    items: list[JobOut]
+    total: int
+    page: int
+    page_size: int
 
 
 class RebuildStatus(BaseModel):
