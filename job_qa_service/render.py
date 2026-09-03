@@ -1,7 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Turning a record into text or structure: LLM context blocks, the template answers
-used whenever the API gives nothing back, and the per-field `details` payload."""
-
 from .columns import (DETAIL_FIELDS, EMPTY_CELLS, FIELD_LABELS, PROSE_COLUMNS)
 from .config import PREVIEW_ITEMS
 from .messages import (DRAFT_HEADER, DRAFT_QUESTION, PROFILE_COVER_LABEL, PROFILE_HEADER,
@@ -29,10 +25,6 @@ def template_two(row1, row2, fields):
 
 
 def render_draft(draft, related):
-    """Formats the *offer*: the proposal is summarized to its title and one-line
-    description, then the user is asked whether to register it. The full record
-    travels in `job_draft`, so a client fills its suggestion form from there
-    rather than parsing this text back apart."""
     lines = [DRAFT_HEADER, "", f"📌 {FIELD_LABELS['job_title']}: {draft['job_title']}"]
     if draft.get("description"):
         lines.append(f"{FIELD_LABELS['description']}: {draft['description']}")
@@ -43,13 +35,6 @@ def render_draft(draft, related):
 
 
 def template_profile(matches):
-    """The advanced search's answer when the API gave nothing back.
-
-    It prints what the ranking already knows — the jobs, and which of the user's own
-    items each one accounted for — rather than apologizing for the missing analysis.
-    That is the same bargain every other fallback here makes: the endpoint answers with
-    data instead of failing because the API did.
-    """
     lines = [PROFILE_HEADER]
     for match in matches:
         lines += ["", f"📌 {match['job_title']}"]
@@ -64,9 +49,6 @@ def template_profile(matches):
 
 
 def profile_context(profile, matches):
-    """What the analysis model is shown: the profile, then each job with the comparison
-    already made. The model writes prose about this and never re-does the matching —
-    see rule 3 of SYSTEM_PROFILE_ANALYZE."""
     lines = ["پروفایل کاربر:"]
     lines += [f"{FIELD_LABELS.get(f, f)}: " + "، ".join(items)
               for f, items in profile.items()]
@@ -82,8 +64,6 @@ def profile_context(profile, matches):
 
 
 def field_items(field, value):
-    """Splits a list column into its members. The three PROSE_COLUMNS have none —
-    there a comma is punctuation, so the cell is one piece of text."""
     if field in PROSE_COLUMNS:
         return []
     return [p.strip() for p in value.split("|")
@@ -91,28 +71,6 @@ def field_items(field, value):
 
 
 def job_detail(row, primary_fields, order=None):
-    """The record's own columns, structured for the client to render as one box per
-    field beside the generated prose. The answer text stays the answer; this is the
-    data it was written from, so a user who asked about tools can still open the
-    duties box without another request.
-
-    `primary_fields` are the columns the answer actually used — INTENT_TO_FIELDS for
-    a question, DISCOVERY_PRIMARY for a described job — and they are flagged and
-    sorted first so the client leads with the right field.
-
-    `order` is `{field: [item, ...]}` from `engine._select_items`: the same items, the
-    ones this particular question is about first. Only `columns.RANKED_FIELDS` ever
-    appear in it, and a column it does not name keeps the order the dataset stored —
-    which for the four taxonomies is O*NET's own importance ranking and is already the
-    right answer. It is a *reordering* and never a filter: `preview` is what decides
-    how much the client shows unopened, so the whole column travels either way and the
-    PDF report, which prints every column whole, is untouched by any of this.
-
-    Per field: `items` is a list column split apart (empty for prose), `value` is
-    always display-ready text — prose verbatim, a list re-joined with «،» so a client
-    that ignores `items` never shows the raw «|» — and `preview` is how many items to
-    show before the reader asks for the rest.
-    """
     primary = set(primary_fields)
     order = order or {}
     fields = []
@@ -122,15 +80,9 @@ def job_detail(row, primary_fields, order=None):
             continue
         items = field_items(key, value)
         chosen = order.get(key)
-        # Length is the cheap proof that the selection is still a permutation of this
-        # column. `_select_items` builds it from these same items, so a mismatch means
-        # the two have come apart — a stale `order`, a row that is not the one it was
-        # built from — and the stored order is the right thing to fall back to. The
-        # invariant being defended is that nothing is ever dropped: `preview` hides the
-        # tail, and a reorder that lost an item would delete data instead.
         if chosen and len(chosen) == len(items):
             items = chosen
-        if key not in PROSE_COLUMNS and not items:      # a list of nothing but «-»
+        if key not in PROSE_COLUMNS and not items:
             continue
         fields.append({
             "key": key,
@@ -140,5 +92,5 @@ def job_detail(row, primary_fields, order=None):
             "primary": key in primary,
             "preview": min(PREVIEW_ITEMS, len(items)),
         })
-    fields.sort(key=lambda f: not f["primary"])          # stable: primary first, order kept
+    fields.sort(key=lambda f: not f["primary"])
     return {"job_title": str(row.get("job_title", "") or "").strip(), "fields": fields}

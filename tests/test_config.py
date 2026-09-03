@@ -1,11 +1,3 @@
-"""`src/config.py`: a missing secret has to stop the process, not be papered over.
-
-The failure this file locks down is the quiet one. `JWT_SECRET: str = getenv("JWT_SECRET")`
-used to hand pydantic `None` when the variable was unset, and the five-part database URL
-became the literal string `postgresql://None:None@None:None/None` — the app
-started, signed tokens with a null key, and only fell over later and somewhere else.
-"""
-
 import os
 
 import pytest
@@ -31,9 +23,6 @@ COMPLETE = {"JWT_SECRET": "a" * 32,
 
 @pytest.fixture
 def env(monkeypatch):
-    """Builds an environment from scratch, so a variable this developer happens to have
-    exported cannot make a test pass."""
-
     def _set(**overrides):
         for name in KNOWN:
             monkeypatch.delenv(name, raising=False)
@@ -60,9 +49,6 @@ def test_a_missing_secret_stops_the_process(env, secret):
 
 
 def test_an_empty_secret_counts_as_missing(env):
-    """`.env.example` ships `OPENAI_API_KEY=` — a deployment that never filled it in
-    would otherwise answer every question from the fallback template instead of the LLM,
-    which looks like the service working."""
     env(OPENAI_API_KEY="")
     with pytest.raises(ValidationError):
         Settings()
@@ -75,14 +61,10 @@ def test_a_jwt_secret_too_short_to_sign_with_is_refused(env):
 
 
 def test_an_admin_password_too_short_for_the_api_is_refused(env):
-    """`AccountIn` requires eight characters of every account made through the API; the
-    seeded first super admin is held to the same bar."""
     env(ADMIN_PASSWORD="short")
     with pytest.raises(ValidationError):
         Settings()
 
-
-# ---------- the database URL ----------
 
 def test_the_url_is_assembled_from_its_parts_when_it_is_not_given(env):
     env(DATABASE_URL=None, POSTGRES_USER="jobs", POSTGRES_PASSWORD="secret",
@@ -103,7 +85,6 @@ def test_a_password_with_punctuation_does_not_cut_the_url_in_half(env):
 
 
 def test_a_half_configured_database_names_what_is_missing(env):
-    """The old form produced `...://None:None@None:None/None` and started anyway."""
     env(DATABASE_URL=None, POSTGRES_USER="jobs")
     with pytest.raises(ValidationError) as raised:
         Settings()
@@ -118,24 +99,17 @@ def test_an_explicit_url_wins_over_the_parts(env):
 
 
 def test_the_url_carries_no_sqlalchemy_driver_suffix(env):
-    """`postgresql+psycopg2://` was SQLAlchemy naming a driver. Prisma's query engine
-    parses the URL itself and refuses a scheme it does not know, so the suffix is not a
-    harmless leftover — it is a connection that never opens."""
     env(DATABASE_URL=None, POSTGRES_USER="jobs", POSTGRES_PASSWORD="secret",
         POSTGRES_DB="jobs_db", DATABASE_HOST="db")
     assert Settings().DATABASE_URL.startswith("postgresql://")
 
 
 def test_the_assembled_url_reaches_the_environment_prisma_reads(env):
-    """The `prisma` CLI and the query engine subprocess read DATABASE_URL themselves and
-    know nothing about this class, so assembling it is only half the job."""
     env(DATABASE_URL=None, POSTGRES_USER="jobs", POSTGRES_PASSWORD="secret",
         POSTGRES_DB="jobs_db", DATABASE_HOST="db")
     settings = Settings()
     assert os.environ["DATABASE_URL"] == settings.DATABASE_URL
 
-
-# ---------- what the crash itself says ----------
 
 def test_the_crash_names_every_variable_that_is_wrong(env):
     env(JWT_SECRET=None, ADMIN_PASSWORD="short")
@@ -146,8 +120,6 @@ def test_the_crash_names_every_variable_that_is_wrong(env):
 
 
 def test_the_crash_does_not_print_the_secrets_it_was_given(env):
-    """A raw ValidationError renders the input it was handed — which is every collected
-    environment variable — into the container log. This is why `load_settings` re-raises."""
     env(JWT_SECRET=None)
     with pytest.raises(RuntimeError) as raised:
         load_settings()
@@ -162,13 +134,7 @@ def test_a_good_environment_still_loads_through_the_same_door(env):
     assert load_settings().ADMIN_USERNAME == "admin"
 
 
-# ---------- where the values may come from ----------
-
 def test_a_dotenv_file_is_not_read(env, tmp_path, monkeypatch):
-    """Deliberate: `job_qa_service/config.py` reads `os.environ` directly and would
-    never see a file loaded here, so a `.env` that satisfied this layer alone would
-    start an API whose engine has no API key. Everything goes in the real environment —
-    in deployment, through compose's `env_file`."""
     env(JWT_SECRET=None)
     (tmp_path / ".env").write_text("JWT_SECRET=" + "b" * 32 + "\n")
     monkeypatch.chdir(tmp_path)
@@ -177,22 +143,17 @@ def test_a_dotenv_file_is_not_read(env, tmp_path, monkeypatch):
 
 
 def test_unrelated_variables_in_the_environment_are_ignored(env, monkeypatch):
-    """The process environment also holds the engine's own variables (EMB_CACHE_DIR,
-    OCCUPATIONS_PATH, HF_TOKEN...) and whatever else the host exports."""
     env()
     monkeypatch.setenv("EMB_CACHE_DIR", "/srv/emb_cache")
     monkeypatch.setenv("SOME_UNRELATED_THING", "1")
     assert Settings().JWT_SECRET == "a" * 32
 
 
-# ---------- rate limiting knobs ----------
-
 def test_the_rate_limits_have_working_defaults(env):
     env()
     settings = Settings()
     assert settings.RATE_LIMIT_ENABLED is True
     assert settings.LOGIN_RATE_LIMIT > 0 and settings.SEARCH_RATE_LIMIT > 0
-    # off by default: an X-Forwarded-For header is client-controlled
     assert settings.TRUST_FORWARDED_FOR is False
 
 

@@ -1,59 +1,3 @@
-#!/usr/bin/env python3
-"""
-build_military_enrichment.py — write `military_enrichment.json`, the taxonomy items the
-102 military occupations were missing.
-
-    python3 build_military_enrichment.py
-
-The military rows were authored, not translated: three `skills`, three `knowledge`, three
-`abilities` and one `work_context` each, against an O*NET median of 7 / 8 / 19 / 18. What
-they hold is good and specific — «بالستیک برد بلند», «اثر باد و شرایط جوی بر گلوله» — and
-none of it is thrown away. What they lack is the *shared* vocabulary: `profile.coverage`
-is set arithmetic over items, so a record with three skills can cover less of a rich
-profile than one with eight, and the military occupations sank below the O*NET ones in
-advanced search even on military profiles.
-
-So the missing items are **selected from the four fixed O*NET taxonomies** rather than
-invented. That is the whole design: the same 10 / 33 / 52 / 55 canonical phrases every
-O*NET row is described with, chosen per occupation. Inventing new phrasing would have
-produced items no user's profile could ever match — the exact problem this is fixing.
-
-The selection is composed rather than written out 102 times:
-
-  * `BASE` is what is true of every military occupation — the basic communication skills,
-    the abilities O*NET gives almost every job, and the work context of a uniformed,
-    team-organised, safety-critical service.
-
-**The order matters, and it is most-specific-first**: the per-occupation `EXTRA`, then the
-bundles, then `BASE`. `profile.coverage` divides by the *user's* item count, so a record
-holding more items can only ever score higher — which means a military row given more
-items than a comparable O*NET row wins on volume rather than on fit. A first pass did
-exactly that (26 abilities against an O*NET median of 19) and put «متخصصان جنگ الکترونیک
-زمینی» above «برنامه‌نویسان کامپیوتر» for a programmer's profile. `merge_occupations_fa.py`
-therefore caps each column at the O*NET median, and this order is what decides which items
-survive the cap: the generic ones are the ones dropped.
-  * `BUNDLES` are the traits that recur across families — `FIELD`, `PHYSICAL`, `DESK`,
-    `ANALYTIC`, `TECH`, `LEAD`, `HAZARD`, `VEHICLE`, `MEDICAL`, `COMMS`, `PRECISION`,
-    `VIGILANCE`, `PUBLIC`. An occupation names the ones that describe it.
-  * `EXTRA` is what only one occupation needs — «قرار گرفتن در معرض تابش» for the CBRN
-    specialists, «هنرهای زیبا» for the band.
-
-Every phrase is checked against `translation_fixes/40_taxonomy_canonical.json` on every
-run, so a typo is a failure here rather than an item that silently matches nothing.
-
-`responsibilities` and `tools` are the two columns that cannot be filled this way, and are
-why `military_responsibilities_fa.json` and `military_tools_extra_fa.json` sit beside this
-file. Task statements belong to one occupation and to nothing else — there is no taxonomy
-to draw «تنظیم و صفر کردن سلاح و ادوات نوری» from — and equipment is a free list rather
-than a closed vocabulary. Both are written by hand, six or seven per occupation, and
-merged into the same table. What is checked for them is only that every occupation named
-in one file is named in all of them.
-
-`tools` matters least of the six: it is deliberately **not** a `PROFILE_FIELDS` column, so
-nothing in advanced search reads it, and it earns its place only through the dense channel
-of `engine._combined_text`.
-"""
-
 from __future__ import annotations
 
 import json
@@ -62,7 +6,6 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CANONICAL = HERE.parent / "translation_fixes" / "40_taxonomy_canonical.json"
 
-# --- what every military occupation shares -------------------------------------------
 BASE = {
     "skills": ["گوش دادن فعال", "سخن گفتن", "تفکر انتقادی", "درک مطلب"],
     "knowledge": ["ایمنی و امنیت عمومی"],
@@ -79,7 +22,6 @@ BASE = {
 }
 
 BUNDLES = {
-    # outdoors, on foot, in the weather
     "FIELD": {
         "knowledge": ["جغرافیا"],
         "abilities": ["بینایی دور", "جهت‌گیری فضایی", "استقامت"],
@@ -89,7 +31,6 @@ BUNDLES = {
                          "صرف زمان برای ایستادن",
                          "استفاده از تجهیزات حفاظتی یا ایمنی معمول مانند کفش ایمنی، عینک، دستکش، محافظ گوش، کلاه ایمنی یا جلیقه نجات"],
     },
-    # carrying, lifting, climbing, crawling
     "PHYSICAL": {
         "abilities": ["قدرت ایستا", "قدرت تنه", "قدرت پویا", "هماهنگی کلی بدن",
                       "هماهنگی چند عضو", "تعادل کلی بدن", "انعطاف‌پذیری دامنه حرکت"],
@@ -97,20 +38,17 @@ BUNDLES = {
                          "صرف زمان برای زانو زدن، چمباتمه زدن، خم شدن یا خزیدن",
                          "نزدیکی فیزیکی"],
     },
-    # watching for something that may not come
     "VIGILANCE": {
         "abilities": ["بینایی در شب", "بینایی محیطی", "درک عمق", "توجه شنیداری",
                       "سرعت ادراکی", "زمان عکس‌العمل"],
         "work_context": ["قرار گرفتن در معرض شرایط نوری بسیار روشن یا ناکافی"],
     },
-    # a desk, a screen, a chain of correspondence
     "DESK": {
         "knowledge": ["اداری", "رایانه و الکترونیک"],
         "abilities": ["درک کتبی", "بیان کتبی", "بینایی نزدیک"],
         "work_context": ["محیط داخلی، دارای کنترل شرایط محیطی", "صرف زمان برای نشستن",
                          "ایمیل", "نامه‌ها و یادداشت‌های کتبی", "مکالمات تلفنی"],
     },
-    # reading, reasoning, writing it up
     "ANALYTIC": {
         "skills": ["نگارش", "یادگیری فعال", "نظارت"],
         "abilities": ["استدلال استقرایی", "انعطاف‌پذیری دسته‌بندی", "درک کتبی",
@@ -118,7 +56,6 @@ BUNDLES = {
         "work_context": ["آزادی در تصمیم‌گیری", "فراوانی تصمیم‌گیری",
                          "تعیین وظایف، اولویت‌ها و اهداف"],
     },
-    # instruments, wiring, maintenance
     "TECH": {
         "skills": ["ریاضیات"],
         "knowledge": ["مهندسی و فناوری", "مکانیک", "فیزیک", "رایانه و الکترونیک"],
@@ -128,7 +65,6 @@ BUNDLES = {
                          "قرار گرفتن در معرض تجهیزات خطرناک",
                          "قرار گرفتن در معرض صداها و سطوح نویزی که حواس‌پرت‌کننده یا آزاردهنده هستند"],
     },
-    # answerable for other people's work
     "LEAD": {
         "knowledge": ["مدیریت و اداره", "پرسنل و منابع انسانی"],
         "abilities": ["روانی ایده‌ها"],
@@ -138,7 +74,6 @@ BUNDLES = {
                          "تأثیر تصمیمات بر همکاران یا نتایج شرکت",
                          "پیامدهای کاری و نتایج سایر کارکنان"],
     },
-    # the work can kill you if done wrong
     "HAZARD": {
         "abilities": ["زمان عکس‌العمل", "جهت‌گیری پاسخ"],
         "work_context": ["قرار گرفتن در معرض شرایط خطرناک",
@@ -146,7 +81,6 @@ BUNDLES = {
                          "استفاده از تجهیزات حفاظتی یا ایمنی تخصصی مانند دستگاه تنفس، هارنس ایمنی، لباس‌های محافظ کامل یا محافظت در برابر تشعشع",
                          "قرار گرفتن در معرض سوختگی‌های جزئی، بریدگی‌ها، گاز گرفتگی‌ها یا نیش‌ها"],
     },
-    # driving, flying, sailing something
     "VEHICLE": {
         "knowledge": ["حمل و نقل"],
         "abilities": ["دقت کنترل", "کنترل نرخ", "زمان عکس‌العمل", "سرعت حرکت اعضا",
@@ -168,14 +102,12 @@ BUNDLES = {
         "abilities": ["توجه شنیداری", "حساسیت شنوایی", "تقسیم توجه", "سرعت ادراکی"],
         "work_context": ["مکالمات تلفنی", "سرعت تعیین‌شده توسط سرعت تجهیزات"],
     },
-    # very small movements, very exactly
     "PRECISION": {
         "abilities": ["ثبات دست و بازو", "مهارت انگشتان", "بینایی نزدیک",
                       "دقت کنترل", "سرعت مچ و انگشتان"],
         "work_context": ["اهمیت تکرار وظایف یکسان",
                          "صرف زمان برای انجام حرکات تکراری"],
     },
-    # standing in front of people who are not soldiers
     "PUBLIC": {
         "knowledge": ["ارتباطات و رسانه", "خدمات مشتری و شخصی", "روان‌شناسی"],
         "work_context": ["تعامل با مشتریان خارجی یا عموم مردم", "سخنرانی عمومی",
@@ -183,7 +115,6 @@ BUNDLES = {
     },
 }
 
-# occupation -> the bundles that describe it, then anything only it needs
 ROWS: dict[str, tuple[list[str], dict]] = {
     "تک‌تیراندازان نظامی": (["FIELD", "PHYSICAL", "VIGILANCE", "HAZARD", "PRECISION"],
         {"skills": ["ریاضیات"], "knowledge": ["فیزیک"],
@@ -247,7 +178,6 @@ ROWS: dict[str, tuple[list[str], dict]] = {
 }
 
 ROWS.update({
-    # --- air ---------------------------------------------------------------------
     "خلبانان جنگنده": (["VEHICLE", "TECH", "VIGILANCE", "HAZARD", "ANALYTIC"],
         {"skills": ["ریاضیات"], "knowledge": ["فیزیک", "جغرافیا"],
          "abilities": ["جهت‌گیری فضایی", "تقسیم توجه", "استدلال ریاضی",
@@ -315,7 +245,6 @@ ROWS.update({
         {"work_context": ["فضای باز، در معرض تمام شرایط آب و هوایی",
                           "قرار گرفتن در معرض آلاینده‌ها"]}),
 
-    # --- sea ---------------------------------------------------------------------
     "افسران ناوبری دریایی": (["VEHICLE", "ANALYTIC", "COMMS", "LEAD", "VIGILANCE"],
         {"skills": ["ریاضیات"], "knowledge": ["جغرافیا", "فیزیک"],
          "abilities": ["استدلال ریاضی", "جهت‌گیری فضایی", "تجسم"],
@@ -393,7 +322,6 @@ ROWS.update({
 })
 
 ROWS.update({
-    # --- signals, cyber, intelligence ---------------------------------------------
     "متخصصان مخابرات نظامی": (["COMMS", "TECH", "DESK", "ANALYTIC"], {}),
     "اپراتورهای ارتباطات ماهواره‌ای": (["COMMS", "TECH", "DESK", "ANALYTIC"],
         {"skills": ["ریاضیات"], "knowledge": ["فیزیک"],
@@ -456,7 +384,6 @@ ROWS.update({
         {"skills": ["ریاضیات"], "knowledge": ["فیزیک", "ریاضیات", "قانون و دولت"],
          "abilities": ["استدلال ریاضی", "توانایی عددی"]}),
 
-    # --- medical ------------------------------------------------------------------
     "پزشکان نظامی": (["MEDICAL", "ANALYTIC", "DESK", "LEAD", "PRECISION"],
         {"skills": ["علوم", "راهبردهای یادگیری"], "knowledge": ["شیمی"],
          "abilities": ["حساسیت به مسئله", "استدلال استقرایی"]}),
@@ -483,7 +410,6 @@ ROWS.update({
          "abilities": ["استدلال استقرایی", "حساسیت به مسئله"],
          "work_context": ["موقعیت‌های تعارض"]}),
 
-    # --- support, command and administration ---------------------------------------
     "افسران لجستیک نظامی": (["ANALYTIC", "DESK", "LEAD"],
         {"skills": ["ریاضیات"], "knowledge": ["حمل و نقل", "اقتصاد و حسابداری"],
          "abilities": ["استدلال ریاضی", "توانایی عددی"]}),
@@ -540,12 +466,10 @@ ROWS.update({
                        "سرعت مچ و انگشتان", "هماهنگی چند عضو"],
          "work_context": ["صرف زمان برای ایستادن", "اهمیت تکرار وظایف یکسان",
                           "فضای باز، در معرض تمام شرایط آب و هوایی"]}),
-    # the dog handlers were placed with the ground occupations above
 })
 
 
 COLUMNS = ["skills", "knowledge", "abilities", "work_context"]
-# free-text columns: written out by hand, checked only for coverage
 HAND = {"responsibilities": HERE / "military_responsibilities_fa.json",
         "tools": HERE / "military_tools_extra_fa.json"}
 
@@ -556,8 +480,6 @@ def main() -> int:
     hand = {c: json.loads(path.read_text(encoding="utf-8"))["add"]
             for c, path in HAND.items()}
 
-    # Every phrase used anywhere here must be one the O*NET rows are described with,
-    # or it is an item no profile can match and no other record shares.
     bad = []
     for label, table in [("BASE", BASE)] + [(f"BUNDLES[{k}]", v) for k, v in BUNDLES.items()]:
         for column, values in table.items():
@@ -575,7 +497,6 @@ def main() -> int:
             for value in values:
                 if value not in allowed[column]:
                     bad.append(f"{title} / {column}: {value!r}")
-    # the hand-written columns: free text, but every occupation must have some
     for column, path in HAND.items():
         for title in ROWS:
             if title not in hand[column]:
@@ -594,7 +515,6 @@ def main() -> int:
         row = {}
         for column in COLUMNS:
             seen, values = set(), []
-            # most specific first — merge_occupations_fa.py truncates the tail
             for source in [extra] + [BUNDLES[b] for b in bundles] + [BASE]:
                 for value in source.get(column, []):
                     if value not in seen:

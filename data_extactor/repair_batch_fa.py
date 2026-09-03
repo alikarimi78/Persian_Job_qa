@@ -1,84 +1,3 @@
-#!/usr/bin/env python3
-"""
-repair_batch_fa.py — fill in the cells the translation pass left in English.
-
-    python3 repair_batch_fa.py --dry-run      # what it would change, and what it cannot
-    python3 repair_batch_fa.py                # rewrite batch_10_fa/ in place
-
-`translate_script.py` validates a batch by counting items, and an untranslated batch is
-the English CSV echoed back — every count matches, so it is accepted. Six batches came
-back that way whole, and `career_path_next` / `job_title` / `aliases` were skipped in
-several more. `aggregate_batch_fa.py` is what finds them; this is what repairs them.
-
-Two sources, in this order:
-
-1. **The corpus itself.** `skills`, `knowledge`, `abilities` and `work_context` are fixed
-   O*NET taxonomies — the same 10 / 33 / 52 / 55 phrases recur across all 1016
-   occupations — and `career_path_next` is drawn from the occupation titles themselves.
-   So a cell left in English can be rebuilt from the rows that *were* translated, item by
-   item. That is not a guess: it is the terminology this corpus already uses, which makes
-   the repaired rows consistent with their neighbours rather than merely correct. The
-   pairing is learned only from cells whose English and Persian item counts agree, so a
-   dropped item cannot shift the whole list by one and teach 30 wrong pairs.
-
-2. **`translation_fixes/*.json`** — hand-written, for what no other row contains: the 45
-   occupation titles that were skipped, five titles that appear only inside
-   `career_path_next`, the task statements unique to one occupation, and the alternative
-   titles. Each file is `{"<column>": {"<english>": "<persian>"}}` and they are merged in
-   filename order, so a later file wins and a correction is a new file rather than an
-   edit to a big one.
-
-   A file may also carry `{"by_code": {"<job_code>": {"<column>": ["…", "…"]}}}`, which
-   replaces a whole cell with a list in the English order. That is the shape the task
-   statements use: they belong to one occupation and nothing else, so repeating each
-   English sentence as a key would double the file for nothing. The list is checked
-   against the English item count on every run — a list of the wrong length is refused
-   rather than silently shifting the row by one.
-
-   Unlike everything else here, a `by_code` cell is applied **even when the cell already
-   holds Persian**, and to any list column including `tools`. It is the only way to fix
-   the other failure this pass produces: a cell where the model dropped one item and
-   translated the rest one position out, so that every remaining item is the translation
-   of its neighbour. There is nothing to detect in such a cell — it is fluent Persian of
-   the right shape — and nothing to rebuild it from, so the corrected list is written by
-   hand and the item count is what proves it lines up again.
-
-   A file may finally carry `{"canonical": {"<column>": {"<english>": "<persian>"}}}`,
-   which is the same table shape but **authoritative over Persian too**: wherever that
-   English item appears in that column, in any row, it is written as that one Persian
-   phrase. This is the third failure the pass produces and the one no per-batch check can
-   see. `skills`, `knowledge`, `abilities` and `work_context` are fixed O*NET taxonomies —
-   10 / 33 / 52 / 55 phrases across all 1016 occupations — and each batch translated them
-   afresh, so «Problem Sensitivity» came back as «حساسیت به مسئله» in 747 rows, «حساسیت به
-   مشکل» in 104 and «حساسیت به مشکلات» in 104 more. Every one of those is a fair
-   translation, which is why nothing flags them; together they are three different items
-   as far as the engine is concerned. `job_qa_service/profile.py` matches a user's items
-   against these by token containment, so a corpus that says the same thing four ways
-   scores the same person differently depending on which row they are compared against.
-   `career_path_next` is canonicalized the same way, against a different authority: its
-   items *are* occupation titles, so each one is written exactly as that occupation's own
-   `job_title` reads, and a career path can be followed to the record it names.
-
-   A canonical rewrite needs the two sides to have the same item count, or there is no
-   telling which English item a Persian one came from; such a cell is counted and left
-   alone rather than guessed at. `by_code` still wins — it is written for one row.
-
-Two more things it normalises, both consistency rather than translation:
-
-  * `job_title` is «Persian (English)» in 971 rows and «English (Persian)» in the 60 that
-    came back from the weaker pass. The halves are swapped so the column reads one way,
-    and a title that came back as Persian alone has the English put back after it — the
-    English half is what `career_path_next` and the alias lists are matched against.
-  * a repaired list is re-joined with " | " exactly, since that separator is what every
-    reader downstream splits on.
-
-`tools` is deliberately left alone: 1099 of its cells across this dataset are brand names
-(`AutoCAD | Revit | Adobe Acrobat`) that are supposed to stay in English.
-
-The first run copies the untouched batches to `batch_10_fa/_pre_repair/`, so the raw
-output of the translation pass is still there to compare against.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -96,13 +15,10 @@ HERE = Path(__file__).resolve().parent
 LIST_COLUMNS = ["aliases", "tools", "skills", "knowledge", "abilities",
                 "work_context", "career_path_next", "responsibilities"]
 
-# What this script will rewrite. `tools` is not here on purpose — see the docstring.
 REPAIR_COLUMNS = ["job_title", "aliases", "skills", "knowledge", "abilities",
                   "work_context", "career_path_next", "responsibilities"]
 
 PERSIAN_RE = re.compile(r"[؀-ۿ]")
-# «Persian (English)» is the house style; this is its mirror image, which is what the
-# batches that came back half-done used.
 REVERSED_TITLE_RE = re.compile(r"^([^()]*[A-Za-z][^()]*)\(([^()]*[؀-ۿ][^()]*)\)\s*$")
 
 
@@ -130,11 +46,6 @@ def read_pairs(src_dir: Path, fa_dir: Path) -> dict[str, tuple[pd.DataFrame, pd.
 
 
 def build_lexicon(pairs) -> dict[str, dict[str, str]]:
-    """english item -> the Persian this corpus most often gives it, per column.
-
-    Learned only from cells where the two sides have the same number of items and the
-    Persian side actually is Persian — anything else would align item 3 with item 4.
-    """
     votes = collections.defaultdict(lambda: collections.defaultdict(collections.Counter))
     for left, right in pairs.values():
         for i in range(len(left)):
@@ -149,9 +60,6 @@ def build_lexicon(pairs) -> dict[str, dict[str, str]]:
 
 
 def load_fixes(directory: Path):
-    """`{column: {english: persian}}`, `{job_code: {column: [persian, …]}}`, and the
-    canonical table `{column: {english: persian}}` that outranks the Persian already
-    in the cell."""
     fixes: dict[str, dict[str, str]] = collections.defaultdict(dict)
     by_code: dict[str, dict[str, list]] = collections.defaultdict(dict)
     canonical: dict[str, dict[str, str]] = collections.defaultdict(dict)
@@ -172,7 +80,6 @@ def load_fixes(directory: Path):
 
 
 def repair(pairs, lexicon, fixes, by_code, canonical, fix_titles: bool):
-    """Returns the repaired frames, a per-column change count, and what is still English."""
     changed = collections.Counter()
     misses = collections.defaultdict(collections.Counter)
     rejected: list[str] = []
@@ -183,7 +90,6 @@ def repair(pairs, lexicon, fixes, by_code, canonical, fix_titles: bool):
         out = right.copy()
         dirty = False
         for i in range(len(out)):
-            # --- job_title: a bare English title, or the halves the wrong way round ---
             title = str(out.job_title.iloc[i]).strip()
             english_title = str(left.job_title.iloc[i]).strip()
             if not has_persian(title):
@@ -202,13 +108,10 @@ def repair(pairs, lexicon, fixes, by_code, canonical, fix_titles: bool):
                     changed["job_title_reordered"] += 1
                     dirty = True
                 elif not re.search(r"[A-Za-z]", title) and english_title:
-                    # translated, but the English half was dropped; put it back
                     out.iat[i, out.columns.get_loc("job_title")] = f"{title} ({english_title})"
                     changed["job_title_english_restored"] += 1
                     dirty = True
 
-            # --- the list columns -------------------------------------------------
-            # --- cells written out by hand: authoritative, even over Persian ---------
             code = str(left.job_code.iloc[i]).strip()
             for column, supplied in by_code.get(code, {}).items():
                 if column not in LIST_COLUMNS:
@@ -220,9 +123,6 @@ def repair(pairs, lexicon, fixes, by_code, canonical, fix_titles: bool):
                                     f"{len(supplied)} items, the English has "
                                     f"{len(english)}")
                     continue
-                # The hand-written list decides which English item each position holds;
-                # the canonical table still decides how that item is worded, or the two
-                # would overwrite each other on every run.
                 table = canonical.get(column, {})
                 joined = " | ".join(table.get(source, str(x).strip())
                                     for source, x in zip(english, supplied))
@@ -231,18 +131,13 @@ def repair(pairs, lexicon, fixes, by_code, canonical, fix_titles: bool):
                     changed[column] += len(supplied)
                     dirty = True
 
-            # --- the fixed taxonomies: one Persian phrase per English term ---------
-            # This runs *after* by_code rather than deferring to it: the two answer
-            # different questions. A hand-written cell decides which English item each
-            # position holds; the table decides how that item is worded. Letting the
-            # hand-written cells opt out left 58 rows spelling «Near Vision» three ways.
             for column, table in canonical.items():
                 english = items(left[column].iloc[i])
                 persian = items(out[column].iloc[i])
                 if not english:
                     continue
                 if len(english) != len(persian):
-                    unaligned[column] += 1        # no telling which item came from which
+                    unaligned[column] += 1
                     continue
                 rebuilt, n = [], 0
                 for source, target in zip(english, persian):
@@ -273,7 +168,7 @@ def repair(pairs, lexicon, fixes, by_code, canonical, fix_titles: bool):
                         rebuilt.append(persian)
                         hit += 1
                     else:
-                        rebuilt.append(term)          # keep it rather than lose the item
+                        rebuilt.append(term)
                         misses[column][term] += 1
                 if hit:
                     out.iat[i, out.columns.get_loc(column)] = " | ".join(rebuilt)

@@ -1,7 +1,3 @@
-"""One-time seed: imports the xlsx dataset as approved records and creates the
-bootstrap super admin from env. Usage (inside the api container or venv):
-    python -m scripts.seed_from_xlsx Merged_Occupations.xlsx
-"""
 import sys
 
 import pandas as pd
@@ -16,12 +12,8 @@ COLUMNS = ["job_title", "aliases", "tools", "skills", "knowledge", "abilities",
 
 
 def main(xlsx_path: str):
-    # The schema must already exist: run `python -m scripts.prisma_cli migrate deploy`
-    # first. The container's CMD chains the two in that order.
     connect()
     try:
-        # The bootstrap account: every other account is created through the API by the
-        # level above it, so the first super_admin has to come from somewhere else.
         if not db.user.find_unique(where={"username": settings.ADMIN_USERNAME}):
             db.user.create(data={
                 "username": settings.ADMIN_USERNAME,
@@ -37,9 +29,6 @@ def main(xlsx_path: str):
                     df[col] = ""
                 df[col] = df[col].fillna("").astype(str)
             df = df[df["job_title"].str.strip() != ""]
-            # One statement for the whole dataset. `add_all` + `commit` used to batch the
-            # inserts for us; `create_many` is Prisma's equivalent, and the alternative
-            # here would be 1116 separate round trips.
             db.jobrecord.create_many(
                 data=[{**{c: row[c] for c in COLUMNS}, "status": JobStatus.approved}
                       for _, row in df.iterrows()])

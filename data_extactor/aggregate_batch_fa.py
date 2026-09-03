@@ -1,56 +1,3 @@
-#!/usr/bin/env python3
-"""
-aggregate_batch_fa.py — merge the translated batches into one xlsx, and check them
-against the English originals they came from.
-
-    python3 aggregate_batch_fa.py                    # batch_10_fa/ -> onet_master_database_fa.xlsx
-    python3 aggregate_batch_fa.py --dry-run          # check only, write nothing
-    python3 aggregate_batch_fa.py --report report.json
-
-`translate_script.py` writes one `<batch>_fa.xlsx` per batch and validates each one on
-its own, against the ten rows it just sent. That is the wrong scale for two questions
-this script exists to answer: whether the *set* of batches is complete, and whether the
-result still lines up with `batch_10/` row for row. It reads both sides, joins them on
-`job_code`, and refuses to write a merged file that fails a hard check.
-
-The checks, and why each one is here rather than in the translator:
-
-  hard (a failure means the merged file is not written)
-    * every English batch has a translation, and no translation has no English original
-    * the row count matches the English corpus exactly
-    * job_code: no duplicates, no additions, no losses, same order
-    * no empty cell anywhere, and no cell holding only a placeholder ("-", "نامشخص", …)
-    * no "|" in the prose columns — a comma is punctuation there, and a pipe in
-      `description` is the corruption `scripts/backfill_from_xlsx.py` exists to repair
-    * the column set is exactly COLUMNS, in that order
-
-  soft (reported, and the file is still written)
-    * per-cell item counts against the English, for the eight "|"-separated columns
-    * **one English term translated more than one way.** Four of these columns are fixed
-      O*NET taxonomies (10 skills / 33 knowledge / 52 abilities / 55 work_context phrases
-      shared by all 1016 rows) and `career_path_next` is drawn from the occupation titles,
-      so each English term has exactly one right Persian phrase. Each batch translated
-      them afresh, though, and «Problem Sensitivity» came back four ways. Nothing else
-      here can see that: every variant is fair Persian of the right item count, so the
-      counts agree and the no-Persian check passes. It matters because the engine compares
-      items as *strings* — `job_qa_service/profile.py` scores a user's skills by token
-      containment against these cells — so a corpus that says one thing four ways ranks
-      the same person differently depending on which row they meet. `repair_batch_fa.py`
-      is what settles on one form; this is what proves it stayed settled.
-    * cells that contain **no Persian at all**. This is the check the translator does not
-      make and the one that matters most here: an untranslated batch comes back with its
-      item counts perfectly intact — it is the English CSV echoed back — so every count
-      test passes and the batch is accepted. Six batches (60 rows) reached the corpus
-      that way. `tools` is exempt because it is *meant* to stay English (brand names),
-      and `aliases` is only reported, since a list of proper names legitimately has none.
-
-The output mirrors `onet_master_database_en.xlsx`: same columns, same order, same row
-count, so the two can be diffed cell by cell. It is deliberately **not** written to
-`../Merged_Occupations.xlsx` — that file is the live seed corpus, carries `row_index` /
-`source` and 100 rows of military occupations this pass knows nothing about, and merging
-the two is a separate decision.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -65,34 +12,21 @@ from openpyxl.styles import Alignment, Font, PatternFill
 
 HERE = Path(__file__).resolve().parent
 
-# The ten content columns plus the join key, in the order the batches carry them.
 COLUMNS = ["job_code", "job_title", "aliases", "tools", "skills", "knowledge",
            "abilities", "work_context", "career_path_next", "description",
            "responsibilities"]
 
-# Cells here are " | "-separated lists and their item counts must survive translation.
 LIST_COLUMNS = ["aliases", "tools", "skills", "knowledge", "abilities",
                 "work_context", "career_path_next", "responsibilities"]
 
-# ...and here a comma is punctuation, so a "|" is damage rather than a separator.
 PROSE_COLUMNS = ["job_title", "description"]
 
-# Columns where one English term has exactly one right Persian phrase: four fixed O*NET
-# taxonomies, the occupation titles `career_path_next` is drawn from, and `tools`, whose
-# generic descriptors ("Web browser software") are translated while its brand names are
-# not — either answer is fine, the same answer everywhere is what is being checked.
 CANONICAL_COLUMNS = ["skills", "knowledge", "abilities", "work_context",
                      "career_path_next", "tools"]
 
-# Columns whose Persian is the whole point of the pass. `tools` is absent on purpose:
-# 1099 of its cells are brand names that must stay in English. `aliases` is absent
-# because a row whose alternative titles are all acronyms has no Persian to show either
-# — it is counted and printed, but it does not make the file wrong.
 MUST_BE_PERSIAN = ["job_title", "skills", "knowledge", "abilities", "work_context",
                    "career_path_next", "description", "responsibilities"]
 
-# What the dataset uses for "nothing here". A cell holding only one of these is empty in
-# every way that matters downstream — `job_qa_service` drops them rather than render a box.
 PLACEHOLDERS = {"-", "--", "—", "–", ".", "‌", "نامشخص", "ندارد", "n/a", "N/A", "none"}
 
 PERSIAN_RE = re.compile(r"[؀-ۿ]")
@@ -108,7 +42,6 @@ def blank(value) -> bool:
 
 
 def read_dir(directory: Path, suffix: str) -> tuple[pd.DataFrame, list[str]]:
-    """Every batch in a directory as one frame, in batch order, plus the names read."""
     files = sorted(p for p in directory.glob("*.xlsx")
                    if not p.name.startswith("~$"))
     frames, names = [], []
@@ -126,7 +59,6 @@ def read_dir(directory: Path, suffix: str) -> tuple[pd.DataFrame, list[str]]:
 
 def check(en: pd.DataFrame, fa: pd.DataFrame, en_names: list[str],
           fa_names: list[str]) -> tuple[list[str], dict]:
-    """Every hard failure, and a report of everything soft."""
     hard: list[str] = []
     soft: dict = {}
 
@@ -146,7 +78,7 @@ def check(en: pd.DataFrame, fa: pd.DataFrame, en_names: list[str],
         if unknown:
             hard.append(f"{label} side has unexpected columns: {unknown}")
     if hard:
-        return hard, soft          # nothing below can be trusted without the columns
+        return hard, soft
 
     if len(fa) != len(en):
         hard.append(f"row count: {len(fa)} translated against {len(en)} English")
@@ -181,7 +113,6 @@ def check(en: pd.DataFrame, fa: pd.DataFrame, en_names: list[str],
     if hard:
         return hard, soft
 
-    # --- soft: item counts, aligned on job_code rather than on position -------------
     left = en.set_index("job_code")
     right = fa.set_index("job_code")
     drift = {}
@@ -196,9 +127,6 @@ def check(en: pd.DataFrame, fa: pd.DataFrame, en_names: list[str],
             drift[column] = rows
     soft["item_drift"] = drift
 
-    # --- soft: one English term written more than one way ---------------------------
-    # Aligned position by position, so only cells whose two sides agree on item count
-    # can vote; anything else could pair item 3 with item 4 and invent a disagreement.
     variants = {}
     for column in CANONICAL_COLUMNS:
         votes = {}
@@ -219,7 +147,6 @@ def check(en: pd.DataFrame, fa: pd.DataFrame, en_names: list[str],
             }
     soft["term_variants"] = variants
 
-    # --- soft: cells with no Persian in them at all ---------------------------------
     untranslated = {}
     for column in COLUMNS[1:]:
         rows = [i for i in fa.index
@@ -236,7 +163,6 @@ def check(en: pd.DataFrame, fa: pd.DataFrame, en_names: list[str],
 
 
 def write_xlsx(frame: pd.DataFrame, path: Path) -> None:
-    """The merged sheet, formatted the way `aggregation_translated_jobs.py` formats its own."""
     path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_excel(path, index=False)
 

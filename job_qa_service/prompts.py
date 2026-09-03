@@ -1,12 +1,3 @@
-# -*- coding: utf-8 -*-
-"""System prompts sent to the LLM. Persian, and all of them forbid Markdown —
-`text.clean_markdown` strips it anyway, but the prompt is the cheaper defence.
-
-The JSON key list in SYSTEM_JOB_GENERATE is a fourth copy of the ten columns: a
-generated draft is parsed against `columns.EXPECTED_COLUMNS`, so a column added there
-and not here simply comes back empty in every draft.
-"""
-
 SYSTEM_SINGLE = (
     "تو موتور پاسخ‌گویی یک اپلیکیشن رسمی معرفی مشاغل هستی و خروجی تو مستقیماً و بدون ویرایش "
     "به کاربر نهایی نمایش داده می‌شود. قوانین را دقیقاً رعایت کن:\n"
@@ -46,12 +37,6 @@ SYSTEM_JOB_MATCH = (
     "5) حداکثر شش جمله. مقدمه، سلام و جمع‌بندی ممنوع."
 )
 
-# Advanced search. The model is given the *result* of the matching, not the corpus:
-# which of the user's items each job accounted for and which it did not, already
-# decided by `profile.coverage`. It writes the analysis and must not re-do the
-# comparison — rule 3 exists because a model handed two lists will happily announce a
-# match the coverage list says was missing, and the numbers on the page beside the text
-# come from the coverage, not from it.
 SYSTEM_PROFILE_ANALYZE = (
     "تو تحلیل‌گر شغلی یک اپلیکیشن رسمی معرفی مشاغل هستی. کاربر به‌جای پرسش، پروفایلی از "
     "مهارت‌ها و ویژگی‌های خودش را وارد کرده و سامانه چند شغل نزدیک به آن را از پایگاه داده "
@@ -69,11 +54,6 @@ SYSTEM_PROFILE_ANALYZE = (
     "7) این یک تحلیل است، نه معرفی شغل جدید: هیچ شغلی که در فهرست نیست نساز و پیشنهاد نده."
 )
 
-# Rule 5 is load-bearing and once said the opposite ("design the nearest real
-# equivalent"), which is how a dragon-training request produced a full
-# «پرورش‌دهنده اژدها» record headed for the moderation queue. Retrieval cannot make
-# this call — see the NOT_A_JOB comment in engine.py — so the world knowledge has to
-# be asked for here.
 SYSTEM_JOB_GENERATE = (
     "تو طراح مشاغل یک اپلیکیشن رسمی معرفی مشاغل هستی. کاربر ویژگی‌های شغلی را توصیف کرده که در "
     "پایگاه داده وجود ندارد. وظیفه تو ساختن یک رکورد شغلی جدید و واقع‌گرایانه بر اساس همان توصیف است.\n"
@@ -103,20 +83,6 @@ SYSTEM_JOB_GENERATE = (
     "7) از Markdown استفاده نکن و هیچ فیلدی را خالی نگذار."
 )
 
-# Item selection: which members of a long list column the question is actually about.
-#
-# The model is asked for **numbers, not text**, and that is the whole safety argument.
-# Every item it may choose is already in the payload, so a pointer is all it can
-# usefully add; a reply of five integers cannot invent a tool the record does not list,
-# drop a word from one it does, or quietly translate one. `engine._select_items` then
-# discards anything out of range and fills the rest of the column from the stored order,
-# so "every column comes back whole" is enforced there rather than promised here.
-#
-# Rule 1 caps at PREVIEW_ITEMS because that is what the client shows unopened; the rest
-# of the column is still sent and still reachable. Rule 4 is the one that earns the call
-# — «برنامه‌نویس جنگو» has to reach Django and Python among 293 tools, and that link is
-# world knowledge, which is exactly what retrieval cannot supply (bge-m3 ranks
-# «نرم‌افزار طراحی لوگو» first for it, on the rhyme).
 SYSTEM_ITEM_SELECT = (
     "تو دستیار انتخاب اطلاعات یک سامانه رسمی معرفی مشاغل هستی. کاربر درباره یک شغل پرسشی "
     "کرده و رکورد آن شغل چند ستون با فهرست بلندی از موارد دارد. وظیفه تو انتخاب "

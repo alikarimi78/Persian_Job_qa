@@ -1,39 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Measures the engine's routing and retrieval, with no LLM calls and no database.
-
-    OCCUPATIONS_PATH=Merged_Occupations.xlsx venv/bin/python3 -m scripts.eval_engine
-    ... --sample 150 --seed 0     # how many records the generated probes are built from
-    ... --all                     # every record (slow on CPU: one encode per question)
-
-This is the runner `eval_questions.csv` never had. Everything runs with
-`use_llm=False`, which is the point rather than a compromise: what is being measured is
-**which record answers and which path the question takes** — the part every threshold in
-`job_qa_service/config.py` was calibrated on — and that part is deterministic and free.
-The prose an LLM writes on top of it is not measurable this way and is not measured.
-
-Six categories, each with its own pass rule, because they fail differently:
-
-  fixture     eval_questions.csv — hand-written pairs. The answering record must be
-              one of the expected titles («|»-separated: some questions sit honestly
-              between two records, and «راننده زره‌پوش» answered from either armored
-              record serves the reader); an empty expected means out_of_domain. A title
-              that no longer exists in the corpus fails loudly as STALE, so the file
-              cannot rot silently across a retranslation.
-  title       «وظایف <title> چیست؟» — the leader must be that record.
-  bare        the title alone — a description request; the leader must be that record.
-  alias       «وظایف <first alias> چیست؟» — the answering record must *carry* that
-              alias (title or aliases). Aliases are shared between records on purpose,
-              so demanding the exact source record would count right answers as wrong.
-  ood         fixed off-topic probes — the mode must be out_of_domain: whatever else
-              happens, nothing is answered and nothing is offered.
-  about       questions about the assistant, and greetings — the mode must be `about`.
-
-The score to watch is per category, not the total: the total moves with --sample while
-each category is comparable run to run under the same seed. Read a drop against the
-baselines in CLAUDE.md before blaming the change you just made — and re-run with the
-same --seed, since the generated probes are sampled.
-"""
-
 import argparse
 import random
 import sys
@@ -42,9 +6,6 @@ import time
 from job_qa_service import JobQAEngine, normalize_text
 from job_qa_service.config import OCCUPATIONS_PATH
 
-# Off-topic on purpose and phrased as questions about the *topic*, never as «شغلی
-# می‌خواهم…»: a job-request phrasing legitimately reaches the discovery path, which is a
-# different behaviour with its own rules, and these probes must measure the OOD gate.
 OOD_PROBES = [
     "طرز تهیه قورمه‌سبزی چیست؟", "قیمت دلار امروز چند است؟", "بهترین گوشی سال کدام است؟",
     "قیمت بیت‌کوین امروز چند است؟", "پایتخت فرانسه کجاست؟", "نتیجه بازی پرسپولیس چه شد؟",
@@ -55,8 +16,6 @@ OOD_PROBES = [
     "فرمول محیط دایره چیست؟", "بهترین دانشگاه ایران کدام است؟",
 ]
 
-# Caught before retrieval, so the answer must be the fixed `about` text — see
-# `intents.is_about_system` / `is_greeting` for what makes each safe.
 ABOUT_PROBES = [
     "کار تو چیه؟", "هدف تو چیه؟", "تو کی هستی؟", "شما کی هستید؟", "کار شما چیست؟",
     "اسمت چیه؟", "چه کاری انجام می‌دهی؟", "چه کمکی می‌توانی به من بکنی؟",
@@ -81,7 +40,6 @@ class Category:
 
 
 def answered_titles(res):
-    """The record(s) a result answers from, whatever its mode calls them."""
     if res.get("jobs"):
         return [normalize_text(t) for t in res["jobs"]]
     return [normalize_text(res["job"])] if res.get("job") else []
@@ -169,10 +127,6 @@ def main():
 
     print("Building engine…", flush=True)
     engine = JobQAEngine(OCCUPATIONS_PATH)
-    # Two lookaside tables the pass rules need: normalized title -> row index, and per
-    # record one normalized string of every name it carries (title + aliases). The alias
-    # rule tests membership by substring on purpose: «برنامه‌نویس» asked, «برنامه‌نویسان
-    # کامپیوتر» answering, is the system working, not a miss.
     engine.titles_normalized = {normalize_text(t): i for i, t in enumerate(engine.titles)}
     engine.record_names = [
         " | ".join([normalize_text(r["job_title"]), normalize_text(str(r["aliases"]))])

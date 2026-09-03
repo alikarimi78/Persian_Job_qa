@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Interactive REPL against the xlsx corpus — the fastest way to exercise retrieval
-and answer generation without the API or a database.
-
-    OCCUPATIONS_PATH=Merged_Occupations.xlsx venv/bin/python3 -m job_qa_service
-"""
-
 from . import JobQAEngine
 from .config import OCCUPATIONS_PATH
 

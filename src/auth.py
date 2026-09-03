@@ -24,10 +24,6 @@ def verify_password(p: str, hashed: str) -> bool:
 def create_token(user: User) -> str:
     payload = {
         "sub": str(user.id),
-        # `user.role` is already the plain string: Prisma's models are configured with
-        # `use_enum_values`, so a role field holds 'super_admin' rather than
-        # `Role.super_admin`. Comparisons against `Role.…` still work — the generated
-        # enum is a `StrEnum` — but there is no `.value` to reach for any more.
         "role": user.role,
         "exp": datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_EXPIRE_MINUTES),
     }
@@ -51,18 +47,8 @@ def get_current_user_optional(
     payload = _decode(credentials)
     if payload is None:
         return None
-    # Looked up rather than trusted from the token: the role, the organization scope and
-    # the blocked flag are all authorization input, and a token minted before a change
-    # must not keep old rights.
-    #
-    # Nothing is included: the caller's scope is a column on this row. `organization`
-    # deliberately is not — including it would pull the logo blob into every
-    # authenticated request, so the two endpoints that need the organization fetch it
-    # narrowed (`accounts.organization_of`).
     user = db.user.find_unique(where={"id": int(payload["sub"])})
     if user is not None and not user.is_active:
-        # Checked here rather than only at login, so blocking takes effect at once
-        # instead of when the token happens to expire.
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Account is blocked")
     return user
 
@@ -74,9 +60,6 @@ def get_current_user(user: User | None = Depends(get_current_user_optional)) -> 
 
 
 def require_roles(*roles: Role):
-    """Dependency factory gating an endpoint on the caller's role. Scope (*which*
-    organization they may touch) is a separate check, done in the handler against the
-    target record — see `accounts.assert_can_manage_*`."""
     allowed = set(roles)
 
     def dependency(user: User = Depends(get_current_user)) -> User:
@@ -87,7 +70,4 @@ def require_roles(*roles: Role):
     return dependency
 
 
-# The old single `admin` role became super_admin, so the job-moderation endpoints it
-# guarded are super-admin-only: approving a suggestion writes to the one global corpus
-# every organization searches, which is not an organization-level decision.
 require_super_admin = require_roles(Role.super_admin)

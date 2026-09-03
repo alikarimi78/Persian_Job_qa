@@ -12,7 +12,6 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 @router.post("/suggestions", response_model=JobOut, status_code=201)
 def suggest_job(body: JobIn, user: User = Depends(get_current_user),
                 db: Prisma = Depends(get_db)):
-    """Logged-in users submit a full record; it waits for admin review."""
     return db.jobrecord.create(data={**body.model_dump(), "status": JobStatus.pending,
                                      "suggested_by": user.id})
 

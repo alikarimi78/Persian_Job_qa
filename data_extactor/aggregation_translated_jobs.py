@@ -4,7 +4,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 import re
 
-input_dir = Path("translated_xlsx")  # مسیر پوشه فایل‌ها
+input_dir = Path("translated_xlsx")
 
 files = sorted(input_dir.glob("Translated_Summarized_Occupations_*.xlsx"))
 
@@ -16,19 +16,14 @@ for f in files:
 merged_df = pd.concat(dfs, ignore_index=True)
 
 def normalize_separators(val):
-    """تبدیل جداکننده‌های مختلف به | استاندارد"""
     if not isinstance(val, str):
         return val
-    # جایگزینی ، و , با |
     val = re.sub(r'\s*،\s*', ' | ', val)
     val = re.sub(r'\s*,\s*', ' | ', val)
-    # پاک‌سازی | های تکراری یا اضافه
     val = re.sub(r'\s*\|\s*', ' | ', val)
     val = re.sub(r'(\|\s*)+', '| ', val)
     return val.strip(' |')
 
-# ستون‌های چندمقداری؛ فقط در اینها ویرگول نقش جداکننده دارد. در ستون‌های نثر
-# (job_title، description، work_context) ویرگول علامت نگارشی است و نباید | شود.
 LIST_COLUMNS = {"aliases", "tools", "skills", "knowledge", "abilities",
                 "career_path_next", "responsibilities"}
 

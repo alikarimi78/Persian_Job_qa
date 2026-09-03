@@ -4,14 +4,6 @@ from pathlib import Path
 import shutil
 
 def split_xlsx_to_batches(input_file, batch_size=10, output_dir="batches"):
-    """
-    Split an xlsx file into batches of specified size, preserving headers.
-
-    Args:
-        input_file: Path to the xlsx file
-        batch_size: Number of data rows per batch (default 10)
-        output_dir: Output directory for batch files
-    """
     input_path = Path(input_file)
     if not input_path.exists():
         raise FileNotFoundError(f"File not found: {input_file}")

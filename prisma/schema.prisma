@@ -1,39 +1,7 @@
-// The schema. This file replaces `app/models.py` + `alembic/versions/*` — one
-// declaration of every table, from which both the Python client and the migration SQL
-// are produced.
-//
-// **Every table and column keeps the name Alembic gave it.** The models are PascalCase
-// and the fields are snake_case, which is not Prisma's usual convention, and both are
-// deliberate: `@@map` / `@map` on forty columns would be forty more places for a typo,
-// and the point of this migration is that the *database* does not change — an existing
-// deployment is baselined against `migrations/0001_init` rather than rebuilt (see
-// README). It also means `src/schemas.py`, the client's forms and the report template
-// still speak of `job_title` and `organization_id`, exactly as before.
-//
-// Two things in `0001_init/migration.sql` are **not** expressible here and are written
-// as raw SQL: the `ck_users_scope` CHECK constraint and the partial unique index
-// `uq_users_org_admin`. Prisma has no syntax for either, and introspection does not see
-// them — so a future `prisma migrate dev` will neither recreate nor notice them. Read
-// the migration before letting one land: if a generated migration proposes dropping the
-// index, delete that statement.
-//
-// There are two migrations, not one, and the seam is deliberate: `0001_init` is exactly
-// the schema Alembic's 0001–0006 produced, and `0002_user_names` is its 0007. That is
-// what lets an existing deployment be baselined with
-// `migrate resolve --applied 0001_init` and then brought forward by an ordinary
-// `migrate deploy`, whichever of the two states its database was left in.
-
 generator client {
   provider = "prisma-client-py"
-  // Sync, not asyncio. The web layer is sync `def` handlers, `EngineManager` rebuilds
-  // the corpus on a plain daemon thread, and the seed/backfill scripts are ordinary
-  // programs — an async client would have needed an event loop in each of those places
-  // to buy nothing. FastAPI already runs `def` handlers in its threadpool.
   interface            = "sync"
   recursive_type_depth = 5
-  // `partial_types.py` builds `OrganizationSummary`, which is how the logo blob stays
-  // out of `GET /orgs` — Prisma's Python client has no per-query `select`, so the
-  // narrowed *model* is what SQLAlchemy's `deferred=True` used to do.
   partial_type_generator = "prisma/partial_types.py"
 }
 
@@ -42,20 +10,11 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// Who a user is, in a one-level tenancy: a user sits directly in an organization. Each
-/// level is provisioned by the level above it — there is no self-registration, so every
-/// account exists because someone with authority made it.
-///
-/// super_admin  everything, including creating organizations and further super admins
-/// org_admin    one per organization; creates that organization's ordinary users
-/// user         uses the system (search, job suggestions); provisions nobody
 enum Role {
   user
   org_admin
   super_admin
 
-  // The type Alembic's 0003 left in the database is lower-case `role`; Prisma would
-  // otherwise create `"Role"`, and the two are different types to Postgres.
   @@map("role")
 }
 
@@ -67,39 +26,18 @@ enum JobStatus {
   @@map("jobstatus")
 }
 
-/// The top of the tenancy, and the only container with a profile of its own.
-///
-/// Everything past `name` is contact detail the customer's admin_panel.mp4 asks for — a
-/// code, an address, a phone, an email, a logo. All of it is nullable: the organizations
-/// that existed before migration 0006 have none of it, and an admin editing one of those
-/// must not be forced to invent an email before they can fix a typo in the name. The
-/// *form* is what requires them; the column only holds what it is given.
 model Organization {
   id      Int     @id @default(autoincrement())
   name    String  @unique(map: "ix_organizations_name") @db.VarChar(128)
-  /// «شناسه سازمان» — the customer's own identifier, not ours. Deliberately not unique:
-  /// it is theirs to collide with, and `name` already carries the uniqueness the system
-  /// needs.
   code    String? @db.VarChar(64)
   address String? @db.VarChar(512)
   phone   String? @db.VarChar(32)
   email   String? @db.VarChar(254)
 
-  /// The logo lives in the row rather than on disk: the container has no writable volume
-  /// of its own (only the two caches), and a file on the filesystem would be one more
-  /// thing to back up in step with the database.
-  ///
-  /// Reading it is opt-in. Prisma's Python client selects every scalar field of whatever
-  /// model it is asked for and has no `select` argument, so the *model* is what narrows
-  /// the query — `prisma/partial_types.py` declares `OrganizationSummary` without this
-  /// column, and that is what `GET /orgs` and every internal lookup use. Ask for the full
-  /// `Organization` only where the image is actually wanted (`GET /orgs/{id}/logo`).
   logo      Bytes?
   logo_mime String?  @db.VarChar(64)
   created_at DateTime @default(now()) @db.Timestamp(6)
 
-  /// Both org_admin and user rows: `ck_users_scope` gives a non-NULL `organization_id`
-  /// to org_admin, and a user carries one directly too (nullable only for a legacy row).
   users User[]
 
   @@map("organizations")
@@ -107,24 +45,12 @@ model Organization {
 
 model User {
   id Int @id @default(autoincrement())
-  /// Global, not per-tenant: login is by username alone, so it has to identify one row
   username        String  @unique(map: "ix_users_username") @db.VarChar(64)
   hashed_password String  @db.VarChar(128)
-  /// The person behind the account, as against the credential above. Both are nullable
-  /// because every row that predates migration 0002_user_names has no name, and a NOT
-  /// NULL would have meant inventing one. New accounts always carry
-  /// both — `AccountIn` requires them — so the slack is for legacy rows only, and
-  /// `models.display_name` is what keeps a nameless one printable.
   first_name      String? @db.VarChar(64)
   last_name       String? @db.VarChar(64)
   role            Role    @default(user)
-  /// Blocked accounts keep everything they own (suggestions, their place in the
-  /// organization) and simply cannot authenticate. Checked on login *and* on every
-  /// request, so an already issued token dies with the block rather than lasting out
-  /// its hour.
   is_active       Boolean @default(true)
-  /// Set directly for both org_admin and user (nullable only for a legacy row that
-  /// predates the hierarchy) — there is no unit indirection any more.
   organization_id Int?
   created_at      DateTime @default(now()) @db.Timestamp(6)
 
@@ -133,8 +59,6 @@ model User {
   suggested_jobs JobRecord[] @relation("suggested_by")
   reviewed_jobs  JobRecord[] @relation("reviewed_by")
 
-  // `ck_users_scope` and `uq_users_org_admin` belong here and cannot be written here —
-  // see the header of this file and `0001_init/migration.sql`.
   @@index([organization_id], map: "ix_users_organization_id")
   @@map("users")
 }
@@ -153,9 +77,6 @@ model JobRecord {
   responsibilities String @default("") @db.Text
 
   status JobStatus @default(pending)
-  /// SetNull, not Cascade: a job record belongs to the corpus, not to the person who
-  /// proposed it. Deleting an account drops the attribution and keeps the record — which
-  /// is also what lets an account be deleted at all once it has suggested one.
   suggested_by Int?
   reviewed_by  Int?
   created_at   DateTime @default(now()) @db.Timestamp(6)

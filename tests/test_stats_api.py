@@ -1,11 +1,3 @@
-"""`/stats`: the dashboard's numbers, and the promise that they are the caller's own.
-
-The endpoint reuses `accounts.visible_users`, so what is worth testing is not the
-arithmetic but the scope — that an org_admin's totals stop at its organization. The world
-fixture is built for exactly that: org_a holds two users below its admin, org_b one, and
-a wrong scope shows up as a number from the other organization.
-"""
-
 import pytest
 
 from src.models import JobStatus
@@ -27,8 +19,6 @@ def test_a_super_admin_counts_everything(world, as_user):
 
 
 def test_an_org_admin_counts_its_own_organization(world, as_user):
-    """Two accounts, not six: `visible_users` leaves out both org_b and the caller's own
-    row, which is the same set `GET /accounts` returns them."""
     body = as_user(world.admin_a)("GET", "/stats").json()
     assert body["scope"] == "organization"
     assert body["scope_name"] == "org-a"
@@ -36,19 +26,14 @@ def test_an_org_admin_counts_its_own_organization(world, as_user):
 
 
 def test_a_role_with_nobody_in_it_is_reported_as_zero(world, as_user):
-    """A bar that vanishes when an organization empties reads as a missing category, not
-    a count."""
     body = as_user(world.admin_a)("GET", "/stats").json()
     assert {r["role"]: r["count"] for r in body["accounts_by_role"]} == {
         "super_admin": 0, "org_admin": 0, "user": 2}
 
 
 def test_the_dataset_size_is_global_but_the_queue_is_scoped(world, db, as_user):
-    """`corpus_records` is the one shared dataset everyone searches, so it does not
-    shrink to a tenant. The pending/approved counts do: they are what *these* accounts
-    suggested."""
     db.jobrecord.create_many(data=[
-        {"job_title": "seeded", "status": JobStatus.approved},             # no suggester
+        {"job_title": "seeded", "status": JobStatus.approved},
         {"job_title": "from-a", "status": JobStatus.pending,
          "suggested_by": world.user_a1.id},
         {"job_title": "from-b", "status": JobStatus.pending,
@@ -57,7 +42,6 @@ def test_the_dataset_size_is_global_but_the_queue_is_scoped(world, db, as_user):
 
     root = as_user(world.root)("GET", "/stats").json()["jobs"]
     assert (root["corpus_records"], root["pending"]) == (1, 2)
-    # No engine is loaded in the test app; None is not the same answer as zero.
     assert root["engine_records"] is None
 
     admin_a = as_user(world.admin_a)("GET", "/stats").json()["jobs"]
@@ -65,15 +49,12 @@ def test_the_dataset_size_is_global_but_the_queue_is_scoped(world, db, as_user):
 
 
 def test_an_admins_own_suggestion_counts_towards_their_scope(world, db, as_user):
-    """`visible_users` excludes the caller — they do not manage themselves — but what
-    they suggested is still their organization's."""
     db.jobrecord.create(data={"job_title": "mine", "status": JobStatus.pending,
                               "suggested_by": world.admin_a.id})
     assert as_user(world.admin_a)("GET", "/stats").json()["jobs"]["pending"] == 1
 
 
 def test_creation_dates_come_back_as_one_count_per_day(world, as_user):
-    """The client groups these into Persian months, which is why they arrive as days."""
     body = as_user(world.root)("GET", "/stats").json()
     assert sum(point["count"] for point in body["accounts_series"]) == 6
     assert sum(point["count"] for point in body["organizations_series"]) == 2

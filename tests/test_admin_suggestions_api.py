@@ -1,13 +1,3 @@
-"""`PUT /admin/suggestions/{id}` — a reviewer correcting a record before deciding on it.
-
-The queue's other two actions are the decision itself; this is the edit that usually
-comes first, and it has to hold the same two rules they do. Moderation is
-**super-admin-only** whatever authority an org_admin has inside their own
-tenancy, because the corpus is one shared dataset; and a record that has already been
-decided on is closed — an approved row is in the corpus every organization searches, so
-changing it there is a dataset edit (and a rebuild), not a review.
-"""
-
 import pytest
 
 from src.engine_manager import manager
@@ -35,8 +25,6 @@ def pending(db, world) -> JobRecord:
 
 @pytest.fixture
 def rebuilds(monkeypatch) -> list:
-    """Records what the handlers asked the engine manager for, without starting a thread
-    that would try to build a real engine from a database this suite does not have."""
     calls = []
     monkeypatch.setattr(manager, "rebuild_async",
                         lambda force_embeddings=False: calls.append(force_embeddings) or True)
@@ -53,11 +41,8 @@ def test_super_admin_edits_a_pending_suggestion(as_user, world, pending, db):
 
     assert response.status_code == 200
     assert response.json()["job_title"] == "راننده نفربر زرهی"
-    # Re-read rather than refreshed: a Prisma model is a value, so the fixture's copy
-    # still holds what the row said when it was created.
     stored = db.jobrecord.find_unique(where={"id": pending.id})
     assert stored.skills == "رانندگی در زمین ناهموار | امدادرسانی"
-    # An edit is not a decision: the record is still waiting for one.
     assert stored.status == JobStatus.pending
     assert stored.suggested_by == world.user_a1.id
 
@@ -92,8 +77,6 @@ def test_approving_starts_a_rebuild(as_user, world, pending, rebuilds):
     response = as_user(world.root)("POST", f"/admin/suggestions/{pending.id}/approve")
 
     assert response.status_code == 200
-    # Not forced: the embedding store is keyed on each record's text, so this encodes the
-    # two texts of the new record and reuses the rest.
     assert rebuilds == [False]
 
 
@@ -109,7 +92,6 @@ def test_only_approval_touches_the_corpus(as_user, world, pending, rebuilds, rou
     response = as_user(world.root)("POST", f"/admin/suggestions/{pending.id}/{route}")
 
     assert response.status_code == expected
-    # Rejecting changes nothing a search can reach, so it must not spend a rebuild.
     assert rebuilds == ([] if route == "reject" else [False])
 
 

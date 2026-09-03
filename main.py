@@ -1,11 +1,3 @@
-"""The application entry point: `uvicorn main:app`.
-
-It sits at the repo root rather than inside `src/` so that the thing you run and the
-thing you read are the same file — the package under it is the implementation. `src/` is
-imported as a top-level package, which is why every command in the README is run from
-here.
-"""
-
 import logging
 from contextlib import asynccontextmanager
 
@@ -20,15 +12,9 @@ log = logging.getLogger("main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # The schema is Prisma's (`python -m scripts.prisma_cli migrate deploy`), not
-    # something this process creates — the container runs it before uvicorn starts.
-    #
-    # The connection is opened here and not at import time on purpose: importing
-    # `src.database` must stay cheap and side-effect-free, or the test suite and every
-    # script would reach for a database merely by importing a router.
     connect()
     try:
-        manager.load()                       # load QA engine from approved DB rows
+        manager.load()
     except RuntimeError as e:
         log.warning(f"Engine not loaded at startup: {e}")
     yield

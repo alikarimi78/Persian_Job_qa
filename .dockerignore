@@ -1,12 +1,3 @@
-# The build context was 6.1 GB, of which `venv/` alone is 6.0 GB — sent to the daemon
-# on every single build, for a Dockerfile that copies about 1 MB of it.
-#
-# This is an **allow-list**: everything is excluded, then the paths the Dockerfile
-# actually COPYs are added back. A deny-list goes stale — it would have to be edited
-# every time the repo grows a directory — while this one cannot let anything in by
-# accident. The cost is that adding a `COPY` to the Dockerfile means adding its source
-# here too, and forgetting fails the build loudly ("file not found") rather than
-# quietly shipping the wrong thing.
 *
 
 !requirements.txt
@@ -17,7 +8,6 @@
 !scripts
 !Merged_Occupations.xlsx
 
-# …minus the noise that lives inside those directories.
 **/__pycache__
 **/*.pyc
 **/.pytest_cache

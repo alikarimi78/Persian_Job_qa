@@ -1,6 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Sparse retrieval channel."""
-
 import math
 from collections import Counter, defaultdict
 
@@ -8,13 +5,6 @@ import numpy as np
 
 
 class BM25:
-    """BM25 with query-max normalization: scores are divided by the maximum score
-    a document matching ALL query tokens could reach, so weak partial matches
-    (or queries whose content words are absent from the corpus) stay low.
-
-    That normalization is what makes `config.THRESHOLD_SPARSE` mean anything: the
-    out-of-domain gate compares against it, and a raw BM25 score has no fixed scale
-    to compare against."""
     K1, B = 1.5, 0.75
 
     def __init__(self, texts):
