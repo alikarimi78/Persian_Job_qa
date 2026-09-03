@@ -13,7 +13,7 @@ from fastapi import FastAPI
 
 from src.database import connect, disconnect
 from src.engine_manager import manager
-from src.routers import accounts, admin, auth, jobs, orgs, reports, search, stats, units
+from src.routers import accounts, admin, auth, jobs, orgs, reports, search, stats
 
 log = logging.getLogger("main")
 
@@ -43,7 +43,6 @@ app.include_router(reports.router)
 app.include_router(jobs.router)
 app.include_router(admin.router)
 app.include_router(orgs.router)
-app.include_router(units.router)
 app.include_router(accounts.router)
 app.include_router(stats.router)
 

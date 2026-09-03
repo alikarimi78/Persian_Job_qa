@@ -13,11 +13,11 @@ Two consequences worth knowing:
   Where two writes have to land together, `db.tx()` is the replacement; nothing in this
   app currently needs one (`accounts.py` writes a single row per operation), which is why
   none appears.
-- **Nothing is lazy-loaded.** SQLAlchemy filled `user.unit` on first access; Prisma
-  leaves a relation `None` unless the query said `include={"unit": True}`. Anything
-  reading through a relation has to load it — `accounts.get_account` and
-  `auth.get_current_user` are where that is done, and the reason both name `unit`
-  explicitly.
+- **Nothing is lazy-loaded.** SQLAlchemy filled a relation on first access; Prisma leaves
+  it `None` unless the query said `include={…}`, and reading through one that was not
+  included sees `None` rather than raising. Nothing in `src/` reaches through a relation
+  today — an account's organization is a column on its own row — so no read here asks
+  for one.
 
 The client is constructed with the URL from `settings` rather than left to read
 `DATABASE_URL` itself, so the five-part assembly in `config.py` is what decides it in

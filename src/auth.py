@@ -51,16 +51,15 @@ def get_current_user_optional(
     payload = _decode(credentials)
     if payload is None:
         return None
-    # Looked up rather than trusted from the token: the role, the org/unit scope and the
-    # blocked flag are all authorization input, and a token minted before a change must
-    # not keep old rights.
+    # Looked up rather than trusted from the token: the role, the organization scope and
+    # the blocked flag are all authorization input, and a token minted before a change
+    # must not keep old rights.
     #
-    # `unit` is included because the caller's own unit is scope: `assert_manages_unit`,
-    # `models.scope_organization_id` and the report masthead all read through it, and
-    # Prisma would leave it None. `organization` deliberately is not — including it would
-    # pull the logo blob into every authenticated request, so the two endpoints that
-    # need the organization fetch it narrowed (`accounts.organization_of`).
-    user = db.user.find_unique(where={"id": int(payload["sub"])}, include={"unit": True})
+    # Nothing is included: the caller's scope is a column on this row. `organization`
+    # deliberately is not — including it would pull the logo blob into every
+    # authenticated request, so the two endpoints that need the organization fetch it
+    # narrowed (`accounts.organization_of`).
+    user = db.user.find_unique(where={"id": int(payload["sub"])})
     if user is not None and not user.is_active:
         # Checked here rather than only at login, so blocking takes effect at once
         # instead of when the token happens to expire.
@@ -76,8 +75,8 @@ def get_current_user(user: User | None = Depends(get_current_user_optional)) -> 
 
 def require_roles(*roles: Role):
     """Dependency factory gating an endpoint on the caller's role. Scope (*which*
-    organization or unit they may touch) is a separate check, done in the handler
-    against the target record — see `accounts.assert_can_manage_*`."""
+    organization they may touch) is a separate check, done in the handler against the
+    target record — see `accounts.assert_can_manage_*`."""
     allowed = set(roles)
 
     def dependency(user: User = Depends(get_current_user)) -> User:

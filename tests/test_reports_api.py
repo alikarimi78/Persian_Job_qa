@@ -84,7 +84,7 @@ def test_blocked_account_cannot_download(as_user, world, db):
 
 def test_every_role_may_download(as_user, world):
     """The report prints an answer, and every provisioned account may search."""
-    for account in (world.root, world.admin_a, world.admin_a1, world.user_a1):
+    for account in (world.root, world.admin_a, world.user_a1):
         response = as_user(account)("POST", "/reports/search", json=payload())
         assert response.status_code == 200, account.username
 
@@ -92,19 +92,19 @@ def test_every_role_may_download(as_user, world):
 # ---------- what the page says ----------
 def test_header_names_the_caller_not_the_body(as_user, world, db):
     """Identity comes from the token. The body has no field for it, and adding one
-    would let a user issue a report over somebody else's name and unit."""
+    would let a user issue a report over somebody else's name and organization."""
     named = db.user.update(where={"id": world.user_a1.id},
                            data={"first_name": "زهرا", "last_name": "کریمی"})
-    html = build_html(ReportIn(**payload()), named, "org-a", "unit-a1")
+    html = build_html(ReportIn(**payload()), named, "org-a")
 
-    assert "org-a" in html and "unit-a1" in html
+    assert "org-a" in html
 
 
 def test_the_masthead_prints_the_person_not_the_username(as_user, world, db):
     """A report is read away from the system, where «user-a1» identifies nobody."""
     named = db.user.update(where={"id": world.user_a1.id},
                            data={"first_name": "زهرا", "last_name": "کریمی"})
-    html = build_html(ReportIn(**payload()), named, "org-a", "unit-a1")
+    html = build_html(ReportIn(**payload()), named, "org-a")
 
     assert "زهرا کریمی" in html
     assert "user-a1" not in html
@@ -186,7 +186,7 @@ def test_a_preview_carrying_payload_still_prints_every_item(as_user, world):
     body = payload()
     for box in body["details"][0]["fields"]:
         box["preview"] = 1                      # the screen would have shown one item
-    html = build_html(ReportIn(**body), Caller(), "org-a", "unit-a1")
+    html = build_html(ReportIn(**body), Caller(), "org-a")
     assert "فرماندهی خدمه توپخانه." in html
     assert "نظارت بر آموزش پرسنل." in html      # the item the screen folded away
 
@@ -234,5 +234,5 @@ def test_the_pdf_itself_renders_for_every_mode():
     error only shows up here, not in the HTML."""
     for mode in ("single", "job_match", "job_generated", "interdisciplinary",
                  "out_of_domain"):
-        pdf = render_pdf(ReportIn(**payload(mode=mode)), Caller(), "org-a", "unit-a1")
+        pdf = render_pdf(ReportIn(**payload(mode=mode)), Caller(), "org-a")
         assert pdf.startswith(b"%PDF-"), mode

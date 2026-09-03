@@ -9,7 +9,7 @@ Two halves, with no import between them in either direction:
 | | |
 |---|---|
 | `main.py` | the entry point — `uvicorn main:app` |
-| `src/` | FastAPI: auth, the organization → unit → user hierarchy, job moderation, `/search` |
+| `src/` | FastAPI: auth, the organization → user hierarchy, job moderation, `/search` |
 | `prisma/` | `schema.prisma` (every table) and the migrations generated from it |
 | `job_qa_service/` | the RAG engine: retrieval (bge-m3 + BM25), intent detection, answer generation |
 
@@ -106,20 +106,19 @@ atomically, so an approval becomes searchable without downtime; embeddings are c
 one vector per text (`emb_cache/`), so a rebuild after one approval encodes two texts
 rather than the whole corpus.
 
-**Two levels of tenancy, four roles**, each provisioned by the one above it. There is no
+**One level of tenancy, three roles**, each provisioned by the one above it. There is no
 self-registration, and every endpoint but `/health` requires a token.
 
 | role | scope | creates |
 |---|---|---|
 | `super_admin` | none — sees everything | organizations, their admins, further super admins |
-| `org_admin` | one organization | that organization's units and their admins |
-| `unit_admin` | one unit | the ordinary users of that unit |
-| `user` | one unit | nobody — searches and suggests jobs |
+| `org_admin` | one organization | the ordinary users of that organization |
+| `user` | one organization | nobody — searches and suggests jobs |
 
 Authorization is two checks, not one: `require_roles` decides who may call an endpoint,
-and `accounts.assert_manages_*` / `assert_can_manage_account` decide which records they
-may touch — an org_admin passes the first for `POST /units` and is still refused a unit
-in someone else's organization. The rule for acting on an account (block, unblock, reset
+and `accounts.assert_manages_organization` / `assert_can_manage_account` decide which
+records they may touch — an org_admin passes the first for `POST /accounts/users` and is
+still refused a user in someone else's organization. The rule for acting on an account (block, unblock, reset
 password, move, delete) is the provisioning chain read downwards: **you may act on the
 accounts you could have created, and never on your own**. The role and the blocked flag
 are re-read from the database on every request, so a token minted before a change
@@ -128,11 +127,15 @@ carries none of the rights it had when it was signed.
 The first super admin comes from `ADMIN_USERNAME` / `ADMIN_PASSWORD` via the seed
 script; every other account is made through the API. Blocking sets `is_active = false`
 and takes effect on existing tokens at once. Deleting is irreversible, but the job
-records the account suggested stay in the corpus, unattributed. A unit can only be
-deleted once it holds no accounts, an organization once it holds no units and no
-accounts — the API answers 409 saying what is in the way rather than cascading.
+records the account suggested stay in the corpus, unattributed. An organization can only
+be deleted once it holds no accounts — the API answers 409 saying what is in the way
+rather than cascading.
 
-**Moderation is super-admin-only**, including for org and unit admins: users submit
+**Passwords** must be at least 8 characters and carry an uppercase letter, a lowercase
+letter and a special character (`schemas._validate_password_strength`); the same rule is
+repeated in the client's forms so a weak one is refused next to the box it was typed in.
+
+**Moderation is super-admin-only**, including for an org_admin: users submit
 complete records to `POST /jobs/suggestions` as `pending`, and approving one writes into
 the single corpus every organization searches, which is not an organization-level
 decision.
@@ -164,21 +167,19 @@ columns a second time — a column added here has to reach it too.
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | POST | /auth/login | public (rate limited) | JWT auth |
-| GET | /auth/me | logged-in | role + organization/unit of the caller |
+| GET | /auth/me | logged-in | role + organization of the caller |
 | POST | /search | logged-in (rate limited) | ask a question |
 | POST | /reports/search | logged-in | print that answer as a PDF report |
 | POST | /jobs/suggestions | logged-in | suggest a full record (pending) |
 | GET | /jobs/suggestions/mine | logged-in | my suggestions + statuses |
 | POST · GET · DELETE | /orgs, /orgs/{id} | super_admin (org_admin reads own) | organizations |
-| POST · GET · DELETE | /units, /units/{id} | super_admin · org_admin | units of an organization |
 | POST | /accounts/super-admins | super_admin | another super admin |
 | POST | /accounts/org-admins | super_admin | an organization's single admin |
-| POST | /accounts/unit-admins | super_admin · org_admin | a unit's single admin |
-| POST | /accounts/users | super_admin · unit_admin | an ordinary user of a unit |
-| GET | /accounts | super_admin · org_admin · unit_admin | accounts in the caller's scope |
+| POST | /accounts/users | super_admin · org_admin | an ordinary user of an organization |
+| GET | /accounts | super_admin · org_admin | accounts in the caller's scope |
 | POST | /accounts/{id}/block · /unblock | any admin, downwards | refuse / restore login |
 | POST | /accounts/{id}/password | any admin, downwards | set a new password |
-| POST | /accounts/{id}/unit | super_admin · org_admin | move the account to another unit |
+| POST | /accounts/{id}/organization | super_admin | move the account to another organization |
 | DELETE | /accounts/{id} | any admin, downwards | delete it (its suggestions remain) |
 | GET | /admin/suggestions | super_admin | list pending records |
 | POST | /admin/suggestions/{id}/approve · /reject | super_admin | review |
@@ -203,12 +204,11 @@ venv/bin/python3 -m scripts.prisma_cli generate                            # reg
 `migrate dev` writes the next migration *and* regenerates the client; `migrate deploy`
 only applies what has not run yet and is what the container does at start.
 
-**Read a generated migration before applying it.** Three objects in `0001_init` are
-hand-written SQL because Prisma can express neither of the two kinds — the
-`ck_users_scope` CHECK constraint and the partial unique indexes `uq_users_org_admin` /
-`uq_users_unit_admin`. Prisma's introspection does not see them either, so it will not
-recreate them and should not propose dropping them; if one ever does, delete that
-statement.
+**Read a generated migration before applying it.** Two objects in `0001_init` are
+hand-written SQL because Prisma can express neither kind — the `ck_users_scope` CHECK
+constraint and the partial unique index `uq_users_org_admin`. Prisma's introspection does
+not see them either, so it will not recreate them and should not propose dropping them;
+if one ever does, delete that statement.
 
 ### Baselining a database that Alembic built
 

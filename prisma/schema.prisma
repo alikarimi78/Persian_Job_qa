@@ -11,11 +11,11 @@
 // still speak of `job_title` and `organization_id`, exactly as before.
 //
 // Two things in `0001_init/migration.sql` are **not** expressible here and are written
-// as raw SQL: the `ck_users_scope` CHECK constraint and the two partial unique indexes
-// (`uq_users_org_admin`, `uq_users_unit_admin`). Prisma has no syntax for either, and
-// introspection does not see them — so a future `prisma migrate dev` will neither
-// recreate nor notice them. Read the migration before letting one land: if a generated
-// migration proposes dropping either index, delete that statement.
+// as raw SQL: the `ck_users_scope` CHECK constraint and the partial unique index
+// `uq_users_org_admin`. Prisma has no syntax for either, and introspection does not see
+// them — so a future `prisma migrate dev` will neither recreate nor notice them. Read
+// the migration before letting one land: if a generated migration proposes dropping the
+// index, delete that statement.
 //
 // There are two migrations, not one, and the seam is deliberate: `0001_init` is exactly
 // the schema Alembic's 0001–0006 produced, and `0002_user_names` is its 0007. That is
@@ -42,17 +42,15 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// Who a user is, in a two-level tenancy: a user sits in a unit, a unit sits in an
-/// organization. Each level is provisioned by the level above it — there is no
-/// self-registration, so every account exists because someone with authority made it.
+/// Who a user is, in a one-level tenancy: a user sits directly in an organization. Each
+/// level is provisioned by the level above it — there is no self-registration, so every
+/// account exists because someone with authority made it.
 ///
 /// super_admin  everything, including creating organizations and further super admins
-/// org_admin    one per organization; creates that organization's units and their admins
-/// unit_admin   one per unit; creates the ordinary users of that unit
+/// org_admin    one per organization; creates that organization's ordinary users
 /// user         uses the system (search, job suggestions); provisions nobody
 enum Role {
   user
-  unit_admin
   org_admin
   super_admin
 
@@ -100,32 +98,11 @@ model Organization {
   logo_mime String?  @db.VarChar(64)
   created_at DateTime @default(now()) @db.Timestamp(6)
 
-  units Unit[]
-  /// Only ever org_admin rows: `ck_users_scope` gives a non-NULL `organization_id` to
-  /// that role and to no other. Everyone else reaches their organization through a unit.
+  /// Both org_admin and user rows: `ck_users_scope` gives a non-NULL `organization_id`
+  /// to org_admin, and a user carries one directly too (nullable only for a legacy row).
   users User[]
 
   @@map("organizations")
-}
-
-model Unit {
-  id              Int          @id @default(autoincrement())
-  name            String       @db.VarChar(128)
-  organization_id Int
-  created_at      DateTime     @default(now()) @db.Timestamp(6)
-
-  // NoAction on both, not Prisma's defaults (SetNull on delete, Cascade on update):
-  // deleting a unit or an organization requires it to be empty, checked in the handlers,
-  // and the foreign key is the backstop that makes that a rule rather than a habit. Left
-  // at the default, deleting an organization would silently orphan its units.
-  organization Organization @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  users        User[]
-
-  // A unit's name only has to be unique inside its own organization
-  @@unique([organization_id, name], map: "uq_units_org_name")
-  @@index([name], map: "ix_units_name")
-  @@index([organization_id], map: "ix_units_organization_id")
-  @@map("units")
 }
 
 model User {
@@ -134,33 +111,31 @@ model User {
   username        String  @unique(map: "ix_users_username") @db.VarChar(64)
   hashed_password String  @db.VarChar(128)
   /// The person behind the account, as against the credential above. Both are nullable
-  /// for the same reason `unit_id` is: every row that predates migration 0007 has no
-  /// name, and a NOT NULL would have meant inventing one. New accounts always carry
+  /// because every row that predates migration 0002_user_names has no name, and a NOT
+  /// NULL would have meant inventing one. New accounts always carry
   /// both — `AccountIn` requires them — so the slack is for legacy rows only, and
   /// `models.display_name` is what keeps a nameless one printable.
   first_name      String? @db.VarChar(64)
   last_name       String? @db.VarChar(64)
   role            Role    @default(user)
-  /// Blocked accounts keep everything they own (suggestions, their place in a unit) and
-  /// simply cannot authenticate. Checked on login *and* on every request, so an already
-  /// issued token dies with the block rather than lasting out its hour.
+  /// Blocked accounts keep everything they own (suggestions, their place in the
+  /// organization) and simply cannot authenticate. Checked on login *and* on every
+  /// request, so an already issued token dies with the block rather than lasting out
+  /// its hour.
   is_active       Boolean @default(true)
-  /// Set for org_admin only; a unit_admin's or user's organization is reached through
-  /// their unit, so it is never stored twice and cannot drift.
+  /// Set directly for both org_admin and user (nullable only for a legacy row that
+  /// predates the hierarchy) — there is no unit indirection any more.
   organization_id Int?
-  unit_id         Int?
   created_at      DateTime @default(now()) @db.Timestamp(6)
 
   organization Organization? @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  unit         Unit?         @relation(fields: [unit_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   suggested_jobs JobRecord[] @relation("suggested_by")
   reviewed_jobs  JobRecord[] @relation("reviewed_by")
 
-  // `ck_users_scope`, `uq_users_org_admin` and `uq_users_unit_admin` belong here and
-  // cannot be written here — see the header of this file and `0001_init/migration.sql`.
+  // `ck_users_scope` and `uq_users_org_admin` belong here and cannot be written here —
+  // see the header of this file and `0001_init/migration.sql`.
   @@index([organization_id], map: "ix_users_organization_id")
-  @@index([unit_id], map: "ix_users_unit_id")
   @@map("users")
 }
 

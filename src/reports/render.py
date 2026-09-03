@@ -135,7 +135,7 @@ def _related(report, matched: list[str]) -> list[str]:
     return [title for title in (report.related_jobs or []) if title not in seen]
 
 
-def build_html(report, user, organization: str | None, unit: str | None,
+def build_html(report, user, organization: str | None,
                moment: datetime | None = None) -> str:
     """The report as HTML, still needing `_ASSET_BASE` to resolve its font and logo.
 
@@ -158,7 +158,6 @@ def build_html(report, user, organization: str | None, unit: str | None,
         # from `schema.prisma` and cannot carry one.
         person=display_name(user),
         organization=organization,
-        unit=unit,
         question=report.question,
         answer=report.answer,
         matched="، ".join(matched) if report.mode in MATCHED_LABEL else "",
@@ -169,9 +168,9 @@ def build_html(report, user, organization: str | None, unit: str | None,
     )
 
 
-def render_pdf(report, user, organization: str | None, unit: str | None) -> bytes:
+def render_pdf(report, user, organization: str | None) -> bytes:
     moment = now()
-    html = build_html(report, user, organization, unit, moment)
+    html = build_html(report, user, organization, moment)
     with _render_lock:
         return HTML(string=html, base_url=_ASSET_BASE).write_pdf()
 

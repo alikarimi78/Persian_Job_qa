@@ -32,15 +32,14 @@ async def search_report(body: ReportIn, user: User = Depends(get_current_user),
     it will render is bounded by `ReportIn` rather than by a budget.
 
     Whose report it is comes from the token, never from the body: the header names the
-    caller and the organization or unit they sit in, resolved as `GET /auth/me` does,
-    so a user cannot issue a report in somebody else's name.
+    caller and the organization they sit in, resolved as `GET /auth/me` does, so a user
+    cannot issue a report in somebody else's name.
     """
     organization = organization_of(db, user)
     # Rendering is blocking and CPU-bound (font shaping, layout, PDF writing)
     pdf = await run_in_threadpool(
         render_pdf, body, user,
         organization.name if organization else None,
-        user.unit.name if user.unit else None,
     )
     return Response(
         content=pdf,

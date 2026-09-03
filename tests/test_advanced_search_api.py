@@ -160,7 +160,7 @@ def test_an_anonymous_caller_is_refused(world, engine, client):
 
 def test_every_role_may_analyse(world, engine, client):
     """The corpus is one shared dataset; nothing about a ranking depends on who asks."""
-    for account in [world.root, world.admin_a, world.admin_a1, world.user_a1]:
+    for account in [world.root, world.admin_a, world.user_a1]:
         assert ask(client, account, VALID).status_code == 200, account.username
 
 

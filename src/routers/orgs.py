@@ -156,8 +156,8 @@ def update_organization(organization_id: int, body: OrganizationUpdateIn,
     profile columns still renames exactly as it did before. A field sent as `""` or
     `null` is cleared — which is the only way to remove a logo.
 
-    Nothing structural moves: units keep pointing at the same id, and so do the
-    accounts. The only way this fails is the name already being someone else's."""
+    Nothing structural moves: the accounts keep pointing at the same id. The only way
+    this fails is the name already being someone else's."""
     get_organization(db, organization_id)
     changes = body.model_dump(exclude_unset=True)
 
@@ -180,15 +180,11 @@ def update_organization(organization_id: int, body: OrganizationUpdateIn,
 @router.delete("/{organization_id}", status_code=204,
                dependencies=[Depends(require_super_admin)])
 def delete_organization(organization_id: int, db: Prisma = Depends(get_db)):
-    """Only an empty organization can go: its units and its admin have to be removed
+    """Only an empty organization can go: its users and its admin have to be removed
     first, deliberately. Emptying it is the same work either way — this way each
-    account and unit is deleted by someone who looked at it, instead of a cascade
-    taking out an entire organization's people on one click."""
+    account is deleted by someone who looked at it, instead of a cascade taking out an
+    entire organization's people on one click."""
     get_organization(db, organization_id)
-    units = db.unit.count(where={"organization_id": organization_id})
-    if units:
-        raise HTTPException(status.HTTP_409_CONFLICT,
-                            f"Organization still has {units} unit(s); delete them first")
     accounts = db.user.count(where={"organization_id": organization_id})
     if accounts:
         raise HTTPException(status.HTTP_409_CONFLICT,

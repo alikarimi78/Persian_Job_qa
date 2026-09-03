@@ -74,7 +74,7 @@ def test_the_role_is_read_from_the_database_not_from_the_token(world, db, as_use
 
     # Written through the client, not by assigning to the object: a Prisma model is a
     # plain value and changing it changes nothing in the database. `ck_users_scope` still
-    # applies — a super_admin has both scope columns NULL, which `user` also allows.
+    # applies — a super_admin has a NULL organization_id, which `user` also allows.
     db.user.update(where={"id": world.root.id}, data={"role": Role.user})
     assert was_super("POST", "/orgs", json={"name": "org-d"}).status_code == 403
 
@@ -121,11 +121,11 @@ def test_a_blocked_account_is_told_apart_from_a_wrong_password(world, db, client
     assert response.status_code == 403
 
 
-def test_a_blocked_unit_admin_does_not_block_its_unit(world, db, client):
+def test_a_blocked_org_admin_does_not_block_its_organization(world, db, client):
     """Blocking is not inherited."""
-    db.user.update(where={"id": world.admin_a1.id}, data={"is_active": False})
+    db.user.update(where={"id": world.admin_a.id}, data={"is_active": False})
     assert client.post("/auth/login",
-                       json={"username": "admin-a1", "password": PASSWORD}).status_code == 403
+                       json={"username": "admin-a", "password": PASSWORD}).status_code == 403
     assert client.post("/auth/login",
                        json={"username": "user-a1", "password": PASSWORD}).status_code == 200
 
@@ -135,10 +135,10 @@ def test_a_blocked_unit_admin_does_not_block_its_unit(world, db, client):
 def test_an_account_changes_its_own_password(world, as_user, client):
     response = as_user(world.user_a1)("POST", "/auth/password",
                                       json={"current_password": PASSWORD,
-                                            "new_password": "brand-new-one"})
+                                            "new_password": "Brand-new-one"})
     assert response.status_code == 200
     assert client.post("/auth/login", json={"username": "user-a1",
-                                            "password": "brand-new-one"}).status_code == 200
+                                            "password": "Brand-new-one"}).status_code == 200
     assert client.post("/auth/login", json={"username": "user-a1",
                                             "password": PASSWORD}).status_code == 401
 
@@ -148,25 +148,25 @@ def test_a_super_admin_can_change_its_own_password(world, as_user, client):
     own row, and a super_admin has nobody above them to do it for them."""
     root = as_user(world.root)
     assert root("POST", f"/accounts/{world.root.id}/password",
-                json={"password": "brand-new-one"}).status_code == 403
+                json={"password": "Brand-new-one"}).status_code == 403
     assert root("POST", "/auth/password",
                 json={"current_password": PASSWORD,
-                      "new_password": "brand-new-one"}).status_code == 200
+                      "new_password": "Brand-new-one"}).status_code == 200
     assert client.post("/auth/login", json={"username": "root",
-                                            "password": "brand-new-one"}).status_code == 200
+                                            "password": "Brand-new-one"}).status_code == 200
 
 
 def test_the_current_password_is_required_and_checked(world, as_user, client):
     """The token alone is not enough — otherwise a session left open on a shared machine
     would be a permanent takeover rather than an hour of borrowed access."""
-    caller = as_user(world.admin_a1)
+    caller = as_user(world.admin_a)
     assert caller("POST", "/auth/password",
                   json={"current_password": "not-the-one",
-                        "new_password": "brand-new-one"}).status_code == 401
+                        "new_password": "Brand-new-one"}).status_code == 401
     assert caller("POST", "/auth/password",
-                  json={"new_password": "brand-new-one"}).status_code == 422
+                  json={"new_password": "Brand-new-one"}).status_code == 422
     # and nothing was changed by either attempt
-    assert client.post("/auth/login", json={"username": "admin-a1",
+    assert client.post("/auth/login", json={"username": "admin-a",
                                             "password": PASSWORD}).status_code == 200
 
 
@@ -178,26 +178,27 @@ def test_a_short_new_password_is_refused(world, as_user):
 
 def test_changing_a_password_needs_a_token(client):
     assert client.post("/auth/password", json={"current_password": "x",
-                                               "new_password": "brand-new-one"}).status_code == 401
+                                               "new_password": "Brand-new-one"}).status_code == 401
 
 
-def test_me_resolves_the_organization_through_the_unit(world, as_user):
-    """`users.organization_id` is NULL for everyone below an org_admin — their
-    organization is reached through their unit, so it can never drift out of step."""
+def test_me_names_the_organization_the_caller_sits_in(world, as_user):
+    """Both an ordinary user and an org_admin carry `organization_id` on their own row,
+    so there is one place it can be read from and nothing to drift out of step."""
     body = as_user(world.user_a1)("GET", "/auth/me").json()
-    assert body["organization_id"] is None
+    assert body["organization_id"] == world.org_a.id
     assert body["organization"]["name"] == "org-a"
-    assert body["unit"]["name"] == "unit-a1"
 
     admin = as_user(world.admin_a)("GET", "/auth/me").json()
     assert admin["organization"]["name"] == "org-a"
-    assert admin["unit"] is None
+
+    root = as_user(world.root)("GET", "/auth/me").json()
+    assert root["organization_id"] is None and root["organization"] is None
 
 
 # ---------- require_roles ----------
 
 @pytest.mark.parametrize("account, allowed", [("root", True), ("admin_a", True),
-                                              ("admin_a1", False), ("user_a1", False)])
+                                              ("user_a1", False), ("user_a2", False)])
 def test_require_roles_gates_on_the_listed_roles(world, app, account, allowed):
     gate = require_roles(Role.super_admin, Role.org_admin)
 
@@ -212,15 +213,15 @@ def test_require_roles_gates_on_the_listed_roles(world, app, account, allowed):
 
 
 def test_require_super_admin_is_the_moderation_gate(world, app):
-    """Moderation is super-admin-only including for org and unit admins: an approval
-    writes into the one corpus every organization searches."""
+    """Moderation is super-admin-only including for an org_admin: an approval writes
+    into the one corpus every organization searches."""
     @app.get("/moderated", dependencies=[Depends(require_super_admin)])
     def moderated():
         return {"ok": True}
 
     client = TestClient(app)
     for account, expected in [(world.root, 200), (world.admin_a, 403),
-                              (world.admin_a1, 403), (world.user_a1, 403)]:
+                              (world.user_a1, 403)]:
         response = client.get("/moderated",
                               headers={"Authorization": f"Bearer {create_token(account)}"})
         assert response.status_code == expected, account.username

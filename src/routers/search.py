@@ -26,7 +26,7 @@ async def search(body: SearchIn, user: User = Depends(search_rate_limit)):
 
     `search_rate_limit` is `get_current_user` plus a per-account ceiling: this is the
     expensive endpoint (one encode and one LLM call per question), so the budget follows
-    the account rather than an IP a whole unit shares.
+    the account rather than an IP a whole organization shares.
     """
     engine = ready_engine()
     # Encoding + LLM call are blocking -> keep the event loop free

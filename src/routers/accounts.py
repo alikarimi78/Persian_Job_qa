@@ -5,11 +5,10 @@ stand in anywhere:
 
     POST /accounts/super-admins   super_admin
     POST /accounts/org-admins     super_admin                       (one per organization)
-    POST /accounts/unit-admins    super_admin | org_admin           (one per unit)
-    POST /accounts/users          super_admin | unit_admin
+    POST /accounts/users          super_admin | org_admin
 
-An org_admin deliberately cannot create ordinary users: they create the units and the
-unit admins, and those admins staff their own unit.
+An org_admin staffs its own organization and nothing else: it cannot make another
+org_admin, and a super_admin is the only one who decides an organization exists at all.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -17,14 +16,14 @@ from prisma import Prisma
 from prisma.types import UserWhereInput
 
 from ..accounts import (assert_can_manage_account, assert_manages_organization,
-                        assert_manages_unit, create_account, delete_account, get_account,
-                        get_organization, get_unit, move_to_organization, move_to_unit,
-                        set_active, set_name, set_password, visible_users)
+                        create_account, delete_account, get_account, get_organization,
+                        move_to_organization, set_active, set_name, set_password,
+                        visible_users)
 from ..auth import require_roles, require_super_admin
 from ..database import get_db
 from ..models import Role, User
-from ..schemas import (AccountIn, MoveOrganizationIn, MoveUnitIn, NameIn, OrgAdminIn,
-                       PasswordResetIn, UnitAdminIn, UserAccountIn, UserOut)
+from ..schemas import (AccountIn, MoveOrganizationIn, NameIn, OrgAdminIn,
+                       PasswordResetIn, UserAccountIn, UserOut)
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -48,45 +47,38 @@ def create_org_admin(body: OrgAdminIn, db: Prisma = Depends(get_db)):
                           role=Role.org_admin, organization_id=body.organization_id)
 
 
-@router.post("/unit-admins", response_model=UserOut, status_code=201)
-def create_unit_admin(body: UnitAdminIn,
-                      actor: User = Depends(require_roles(Role.super_admin, Role.org_admin)),
-                      db: Prisma = Depends(get_db)):
-    unit = get_unit(db, body.unit_id)
-    assert_manages_organization(actor, unit.organization_id)
-    return create_account(db, username=body.username, password=body.password,
-                          first_name=body.first_name, last_name=body.last_name,
-                          role=Role.unit_admin, unit_id=unit.id)
-
-
 @router.post("/users", response_model=UserOut, status_code=201)
 def create_user(body: UserAccountIn,
-                actor: User = Depends(require_roles(Role.super_admin, Role.unit_admin)),
+                actor: User = Depends(require_roles(Role.super_admin, Role.org_admin)),
                 db: Prisma = Depends(get_db)):
-    unit_id = body.unit_id
-    if actor.role == Role.unit_admin:
-        if unit_id is not None and unit_id != actor.unit_id:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "Outside your unit")
-        unit_id = actor.unit_id
-    elif unit_id is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "unit_id is required")
+    """An ordinary user, in an organization. An org_admin's organization is not theirs
+    to choose — naming a different one is a scope error rather than a silent redirect to
+    their own — while a super_admin has none to default to and must say which."""
+    organization_id = body.organization_id
+    if actor.role == Role.org_admin:
+        if organization_id is not None and organization_id != actor.organization_id:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Outside your organization")
+        organization_id = actor.organization_id
+    elif organization_id is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "organization_id is required")
 
-    unit = get_unit(db, unit_id)
-    assert_manages_unit(actor, unit)
+    get_organization(db, organization_id)
+    assert_manages_organization(actor, organization_id)
     return create_account(db, username=body.username, password=body.password,
                           first_name=body.first_name, last_name=body.last_name,
-                          role=Role.user, unit_id=unit.id)
+                          role=Role.user, organization_id=organization_id)
 
 
-_any_admin = require_roles(Role.super_admin, Role.org_admin, Role.unit_admin)
+_any_admin = require_roles(Role.super_admin, Role.org_admin)
 
 
 @router.post("/{user_id}/block", response_model=UserOut)
 def block_account(user_id: int, actor: User = Depends(_any_admin),
                   db: Prisma = Depends(get_db)):
-    """Refuses the account entry without deleting anything: its suggestions, its unit
-    and its history stay. Blocking is not inherited — blocking a unit_admin leaves that
-    unit's users able to log in."""
+    """Refuses the account entry without deleting anything: its suggestions, its
+    organization and its history stay. Blocking is not inherited — blocking an org_admin
+    leaves that organization's users able to log in."""
     target = get_account(db, user_id)
     assert_can_manage_account(actor, target)
     return set_active(db, target, False)
@@ -126,38 +118,19 @@ def rename_account(user_id: int, body: NameIn, actor: User = Depends(_any_admin)
     return set_name(db, target, body.first_name, body.last_name)
 
 
-@router.post("/{user_id}/unit", response_model=UserOut)
-def move_account(user_id: int, body: MoveUnitIn,
-                 actor: User = Depends(require_roles(Role.super_admin, Role.org_admin)),
-                 db: Prisma = Depends(get_db)):
-    """Moves an account into another unit, keeping its role.
-
-    Not open to a unit_admin: they run one unit, and moving someone across units is a
-    decision about two of them. The pair of checks below is what keeps an org_admin
-    inside their organization — they must manage both the account and the destination.
-    """
-    target = get_account(db, user_id)
-    assert_can_manage_account(actor, target)
-    unit = get_unit(db, body.unit_id)
-    assert_manages_unit(actor, unit)
-    return move_to_unit(db, target, unit)
-
-
 @router.post("/{user_id}/organization", response_model=UserOut)
 def move_account_organization(user_id: int, body: MoveOrganizationIn,
                               actor: User = Depends(require_super_admin),
                               db: Prisma = Depends(get_db)):
-    """Moves an organization's admin into another organization, keeping its role.
+    """Moves an account into another organization, keeping its role — an org_admin or an
+    ordinary user, since both sit in an organization directly. It is the whole of what
+    «ویرایش» means beyond the person's name, since a role decides which scope column the
+    row carries and a username is the credential.
 
-    The counterpart of `/unit` for the one role that lives in an organization rather
-    than in a unit — and the whole of what «ویرایش» means for such an account, since a
-    role decides which scope column the row carries and a username is the credential.
-
-    Super-admin only, and not by omission: `assert_can_manage_account` already refuses
-    an org_admin every other org_admin (a peer has no unit through which it could be
-    inside their organization), and an org_admin has no second organization to move
-    anyone into. It is still asked here, because it is also what stops a caller acting
-    on their own row.
+    Super-admin only, and not by omission: an org_admin has no second organization to
+    move anyone into, so the endpoint would have nothing to offer them.
+    `assert_can_manage_account` is still asked, because it is also what stops a caller
+    acting on their own row.
     """
     target = get_account(db, user_id)
     assert_can_manage_account(actor, target)
@@ -176,8 +149,7 @@ def delete_account_endpoint(user_id: int, actor: User = Depends(_any_admin),
 
 
 @router.get("", response_model=list[UserOut])
-def list_accounts(role: Role | None = None, unit_id: int | None = None,
-                  organization_id: int | None = None,
+def list_accounts(role: Role | None = None, organization_id: int | None = None,
                   actor: User = Depends(_any_admin), db: Prisma = Depends(get_db)):
     """The accounts within the caller's span of control, optionally filtered.
 
@@ -188,11 +160,7 @@ def list_accounts(role: Role | None = None, unit_id: int | None = None,
     filters: list[UserWhereInput] = []
     if role is not None:
         filters.append({"role": role})
-    if unit_id is not None:
-        filters.append({"unit_id": unit_id})
     if organization_id is not None:
-        # Matches an org_admin by their own column and everyone else through their unit
-        filters.append({"OR": [{"organization_id": organization_id},
-                               {"unit": {"is": {"organization_id": organization_id}}}]})
+        filters.append({"organization_id": organization_id})
     where: UserWhereInput | None = {"AND": filters} if filters else None
     return visible_users(db, actor, where, order="username")

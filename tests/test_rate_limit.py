@@ -310,12 +310,12 @@ def test_search_is_capped_per_account(world, search_app):
 
 
 def test_the_budget_belongs_to_the_account_not_to_the_address(world, search_app):
-    """A whole unit behind one office IP must not share one allowance."""
+    """A whole organization behind one office IP must not share one allowance."""
     client = TestClient(search_app)
     for _ in range(3):
         ask(client, world.user_a1)
     assert ask(client, world.user_a1).status_code == 429
-    assert ask(client, world.user_a1b).status_code == 200
+    assert ask(client, world.user_a2).status_code == 200
 
 
 def test_admins_are_capped_too(world, search_app):

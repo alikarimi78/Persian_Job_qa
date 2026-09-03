@@ -20,7 +20,7 @@ The SQLAlchemy suite ran on one in-memory SQLite held open by a `StaticPool`, wh
 nothing and needed no server. That is not available under Prisma: the client is generated
 against the `provider` named in `prisma/schema.prisma`, and there is no way to point a
 postgresql client at a SQLite file. So the suite talks to a real database, and gains
-something for the price — `ck_users_scope` and the two partial unique indexes are
+something for the price — `ck_users_scope` and the partial unique index are
 Postgres objects written as raw SQL in `prisma/migrations/0001_init`, and SQLite only ever
 imitated them through a `sqlite_where` twin in the model. What the tests exercise now is
 the constraint the deployment actually has.
@@ -28,7 +28,7 @@ the constraint the deployment actually has.
 Point it somewhere with `TEST_DATABASE_URL`, or let it derive `<database>_test` from a
 `DATABASE_URL` already in the environment (which is what makes
 `set -a; . ../job_qa_deploy/.env; set +a` enough to run the suite). **The name must end
-in `_test`**: every test truncates all four tables, and the guard below is what stands
+in `_test`**: every test truncates all three tables, and the guard below is what stands
 between that and somebody's real database.
 """
 
@@ -67,7 +67,7 @@ DATABASE_URL = _test_database_url()
 if not urlsplit(DATABASE_URL).path.endswith("_test"):
     raise RuntimeError(
         f"Refusing to run the suite against {urlsplit(DATABASE_URL).path.lstrip('/')!r}: "
-        "every test truncates all four tables, so the database name has to end in "
+        "every test truncates all three tables, so the database name has to end in "
         "'_test'. Set TEST_DATABASE_URL.")
 os.environ["DATABASE_URL"] = DATABASE_URL
 # The five parts are no longer consulted once DATABASE_URL is set, but a stale
@@ -93,16 +93,17 @@ from src.routers import auth as auth_router
 from src.routers import orgs as orgs_router
 from src.routers import reports as reports_router
 from src.routers import stats as stats_router
-from src.routers import units as units_router
 
-PASSWORD = "correct-horse-battery"
+# Meets the strength rule `schemas._validate_password_strength` enforces (upper, lower,
+# special), so a test may send it to an endpoint as well as hash it directly.
+PASSWORD = "Correct-horse-battery1"
 # bcrypt costs ~100 ms by design; the fixtures make a dozen accounts per test, so the
 # one hash every account shares is computed once for the whole session.
 _HASHED = hash_password(PASSWORD)
 
 # Children before parents is irrelevant under CASCADE, but the list is the schema's own
 # order so that a table added to `schema.prisma` and forgotten here is easy to spot.
-TABLES = ("jobs_info", "users", "units", "organizations")
+TABLES = ("jobs_info", "users", "organizations")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -110,7 +111,7 @@ def database():
     """Rebuilds the test database from the migrations, once, then opens the client.
 
     `migrate reset` and not `db push`: `db push` writes what `schema.prisma` describes,
-    and the CHECK constraint plus the two partial unique indexes exist only in the
+    and the CHECK constraint plus the partial unique index exist only in the
     migration SQL — pushed instead of migrated, the suite would be testing a schema
     missing exactly the invariants it asserts.
 
@@ -152,15 +153,12 @@ def db(database):
 
 
 class World:
-    """Two organizations, three units, and one account of every role in each — enough
-    for "may this caller touch that account" to have a wrong answer available at every
-    level.
+    """Two organizations with an admin and users each, plus a super_admin outside both —
+    enough for "may this caller touch that account" to have a wrong answer available at
+    every level.
 
-        org_a ── unit_a1 ── admin_a1 (unit_admin), user_a1, user_a1b
-            │        └─ unit_a2 ── admin_a2 (unit_admin), user_a2
-            └─ admin_a (org_admin)
-        org_b ── unit_b1 ── admin_b1 (unit_admin), user_b1
-            └─ admin_b (org_admin)
+        org_a ── admin_a (org_admin), user_a1, user_a2
+        org_b ── admin_b (org_admin), user_b1
         root (super_admin, in neither)
 
     Built through the Prisma client rather than through `/accounts`, so `ck_users_scope`
@@ -173,41 +171,23 @@ class World:
         self.org_a = db.organization.create(data={"name": "org-a"})
         self.org_b = db.organization.create(data={"name": "org-b"})
 
-        self.unit_a1 = db.unit.create(data={"name": "unit-a1",
-                                            "organization_id": self.org_a.id})
-        self.unit_a2 = db.unit.create(data={"name": "unit-a2",
-                                            "organization_id": self.org_a.id})
-        self.unit_b1 = db.unit.create(data={"name": "unit-b1",
-                                            "organization_id": self.org_b.id})
-
         self.root = self.make_user("root", Role.super_admin)
         self.admin_a = self.make_user("admin-a", Role.org_admin, organization=self.org_a)
         self.admin_b = self.make_user("admin-b", Role.org_admin, organization=self.org_b)
-        self.admin_a1 = self.make_user("admin-a1", Role.unit_admin, unit=self.unit_a1)
-        self.admin_a2 = self.make_user("admin-a2", Role.unit_admin, unit=self.unit_a2)
-        self.admin_b1 = self.make_user("admin-b1", Role.unit_admin, unit=self.unit_b1)
-        self.user_a1 = self.make_user("user-a1", Role.user, unit=self.unit_a1)
-        self.user_a1b = self.make_user("user-a1b", Role.user, unit=self.unit_a1)
-        self.user_a2 = self.make_user("user-a2", Role.user, unit=self.unit_a2)
-        self.user_b1 = self.make_user("user-b1", Role.user, unit=self.unit_b1)
+        self.user_a1 = self.make_user("user-a1", Role.user, organization=self.org_a)
+        self.user_a2 = self.make_user("user-a2", Role.user, organization=self.org_a)
+        self.user_b1 = self.make_user("user-b1", Role.user, organization=self.org_b)
 
-    def make_user(self, username: str, role: Role, *, organization=None, unit=None) -> User:
-        # `include` is not decoration: `assert_can_manage_account` decides an org_admin's
-        # reach by reading `target.unit.organization_id`, and Prisma leaves an
-        # un-included relation as None. An account built without it would look unit-less
-        # to every rule in `accounts.py` — the same shape `accounts.get_account` loads.
+    def make_user(self, username: str, role: Role, *, organization=None) -> User:
         return self.db.user.create(
             data={"username": username, "hashed_password": _HASHED, "role": role,
-                  "organization_id": organization.id if organization else None,
-                  "unit_id": unit.id if unit else None},
-            include={"unit": True})
+                  "organization_id": organization.id if organization else None})
 
     def reload(self, user: User) -> User:
-        """The account as the database now holds it, with its unit loaded the way
-        `accounts.get_account` loads it. Prisma models are plain values — nothing about
-        them tracks the row, so a test that changed something re-reads it here instead of
-        expecting the object it already has to follow along."""
-        return self.db.user.find_unique(where={"id": user.id}, include={"unit": True})
+        """The account as the database now holds it. Prisma models are plain values —
+        nothing about them tracks the row, so a test that changed something re-reads it
+        here instead of expecting the object it already has to follow along."""
+        return self.db.user.find_unique(where={"id": user.id})
 
 
 @pytest.fixture
@@ -228,7 +208,6 @@ def app(db) -> FastAPI:
     api.include_router(auth_router.router)
     api.include_router(accounts_router.router)
     api.include_router(orgs_router.router)
-    api.include_router(units_router.router)
     api.include_router(stats_router.router)
     api.include_router(reports_router.router)
     # The moderation queue reaches `engine_manager` for the rebuild endpoints, which is

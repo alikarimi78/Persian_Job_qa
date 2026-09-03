@@ -9,19 +9,18 @@ They are functions now because a generated Prisma model is a pydantic model that
 rewritten by `prisma generate` — a property added to it would last exactly until the next
 one. `display_name(user)` reads no worse than `user.display_name` and cannot be lost.
 
-**Relations are None unless the query included them.** `scope_organization_id` needs
-`user.unit`, so its caller has to have loaded the account with `include={"unit": True}`;
-`accounts.get_account` and `auth.get_current_user` both do. There is no lazy load to fall
-back on — reading through a relation that was not included silently sees `None`, which is
-the one class of bug this migration can introduce quietly.
+**Relations are None unless the query included them.** There is no lazy load to fall back
+on — reading through a relation that was not included silently sees `None`, which is the
+one class of bug this migration can introduce quietly. Nothing here reaches through a
+relation any more: an account's organization is a column on the row itself.
 """
 
 from prisma.enums import JobStatus, Role
-from prisma.models import JobRecord, Organization, Unit, User
+from prisma.models import JobRecord, Organization, User
 from prisma.partials import OrganizationSummary
 
 __all__ = ["JobRecord", "JobStatus", "Organization", "OrganizationSummary", "Role",
-           "Unit", "User", "display_name", "full_name", "has_logo", "join_name",
+           "User", "display_name", "full_name", "has_logo", "join_name",
            "scope_organization_id"]
 
 
@@ -59,10 +58,10 @@ def has_logo(org: Organization | OrganizationSummary) -> bool:
 
 
 def scope_organization_id(user: User) -> int | None:
-    """The organization this account belongs to, wherever it is recorded.
-    None for a super_admin (who belongs to all of them) and for a legacy user.
+    """The organization this account belongs to. None for a super_admin (who belongs to
+    all of them) and for a legacy user row that was never given one.
 
-    Needs `unit` to have been included on `user`; see the module docstring."""
-    if user.organization_id is not None:
-        return user.organization_id
-    return user.unit.organization_id if user.unit is not None else None
+    A thin wrapper over the column now that the unit level is gone, kept because it is
+    what every caller asks the question through — and because «which organization is this
+    account in» is a question about the tenancy, not about a column."""
+    return user.organization_id

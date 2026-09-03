@@ -2,7 +2,7 @@
 
 The queue's other two actions are the decision itself; this is the edit that usually
 comes first, and it has to hold the same two rules they do. Moderation is
-**super-admin-only** whatever authority an org or unit admin has inside their own
+**super-admin-only** whatever authority an org_admin has inside their own
 tenancy, because the corpus is one shared dataset; and a record that has already been
 decided on is closed — an approved row is in the corpus every organization searches, so
 changing it there is a dataset edit (and a rebuild), not a review.
@@ -72,7 +72,7 @@ def test_the_edit_survives_into_the_approval(as_user, world, pending, db):
     assert response.json()["status"] == "approved"
 
 
-@pytest.mark.parametrize("account", ["admin_a", "admin_a1", "user_a1"])
+@pytest.mark.parametrize("account", ["admin_a", "user_a1", "user_a2"])
 def test_only_a_super_admin_may_edit(as_user, world, pending, account):
     response = as_user(getattr(world, account))(
         "PUT", f"/admin/suggestions/{pending.id}", json=edited(job_title="عنوان دیگر"))

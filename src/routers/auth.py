@@ -11,8 +11,8 @@ from ..schemas import LoginIn, MeOut, NameIn, SelfPasswordIn, TokenOut, UserOut
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 # There is no public registration endpoint. Accounts are provisioned down the
-# hierarchy — a unit_admin creates users, an org_admin creates unit admins, a
-# super_admin creates organizations and their admins — under /accounts/*.
+# hierarchy — an org_admin creates its organization's users, a super_admin creates
+# organizations and their admins — under /accounts/*.
 
 
 @router.post("/login", response_model=TokenOut)
@@ -85,8 +85,7 @@ def change_own_name(body: NameIn, user: User = Depends(get_current_user),
 
 @router.get("/me", response_model=MeOut)
 def me(user: User = Depends(get_current_user), db: Prisma = Depends(get_db)):
-    """Who the caller is and where they sit. `organization` is resolved through the
-    unit for a unit_admin or user, whose organization_id column is NULL by design.
+    """Who the caller is and where they sit.
 
     The organization is a second query rather than a relation walked off `user`
     (`accounts.organization_of`), and narrowed to `OrganizationSummary`. Including it on
@@ -95,5 +94,5 @@ def me(user: User = Depends(get_current_user), db: Prisma = Depends(get_db)):
     """
     return MeOut(id=user.id, username=user.username, role=user.role,
                  first_name=user.first_name, last_name=user.last_name,
-                 organization_id=user.organization_id, unit_id=user.unit_id,
-                 organization=organization_of(db, user), unit=user.unit)
+                 organization_id=user.organization_id,
+                 organization=organization_of(db, user))

@@ -19,13 +19,31 @@ class TokenOut(BaseModel):
     role: str
 
 
-# ---------- tenancy: organizations and units ----------
+# ---------- tenancy: organizations ----------
 # A data URI is ~4/3 of the bytes it carries, so this caps the encoded string a little
 # above `MAX_LOGO_BYTES` (routers/orgs.py) — a cheap first guard, so an oversized upload
 # is refused by the parser instead of being base64-decoded first.
 _MAX_LOGO_URI = 800_000
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
+# What counts as a "special character": anything that is not a plain ASCII letter or
+# digit. Deliberately not a fixed allowlist (e.g. just `@`) — the customer's example was
+# illustrative, not exhaustive.
+_PASSWORD_SPECIAL_RE = re.compile(r"[^A-Za-z0-9]")
+
+
+def _validate_password_strength(value: str) -> str:
+    """A password must carry an uppercase letter, a lowercase letter, and a special
+    character — on top of the `min_length=8` each field below still declares. Shared by
+    every field that stores a plaintext password, so the rule cannot drift between
+    account creation, an admin's reset, and a self-service change."""
+    if (not re.search(r"[a-z]", value) or not re.search(r"[A-Z]", value)
+            or not _PASSWORD_SPECIAL_RE.search(value)):
+        raise ValueError("Password must contain an uppercase letter, a lowercase "
+                         "letter, and a special character (e.g. @)")
+    return value
+
+
 # Persian and Arabic-Indic digits both reach us from an Iranian keyboard; the column
 # stores ASCII so that two records typed on different layouts are the same phone number.
 # The client renders them back to Persian digits with `faNumber`, as it does everywhere.
@@ -137,31 +155,6 @@ class OrganizationLogoOut(BaseModel):
     logo: str | None = None
 
 
-class UnitIn(BaseModel):
-    name: str = Field(min_length=2, max_length=128)
-    # Required of a super_admin, who has no organization of their own to default to;
-    # an org_admin may omit it, and may not name any organization but their own.
-    organization_id: int | None = None
-
-
-class UnitOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    name: str
-    organization_id: int
-
-
-class RenameIn(BaseModel):
-    """The whole of what `PATCH /units/{id}` accepts. A unit is its name plus what it
-    holds, and everything it holds moves through its own endpoint — it never changes
-    organization here and never changes id.
-
-    Organizations outgrew this when they gained a profile (`OrganizationUpdateIn`); a
-    unit has not, and giving it the same partial-update shape would only add a way to
-    send nothing at all."""
-    name: str = Field(min_length=2, max_length=128)
-
-
 # ---------- accounts ----------
 class NameIn(BaseModel):
     """`POST /accounts/{id}/name` and `POST /auth/name`. Both parts together, never one
@@ -183,8 +176,8 @@ class NameIn(BaseModel):
 
 class AccountIn(NameIn):
     """Credentials for an account someone else is creating, plus who the account *is*.
-    There is no self-service registration: the scope (which organization or unit) comes
-    from the endpoint and the caller, never from the person being created.
+    There is no self-service registration: the scope (which organization) comes from the
+    endpoint and the caller, never from the person being created.
 
     The name is required here even though the columns are nullable (migration 0007).
     That split is deliberate and is the same one the organization profile makes: the
@@ -195,29 +188,26 @@ class AccountIn(NameIn):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=8, max_length=128)
 
+    @field_validator("password")
+    @classmethod
+    def _password_strength(cls, value: str) -> str:
+        return _validate_password_strength(value)
+
 
 class OrgAdminIn(AccountIn):
     organization_id: int
 
 
-class UnitAdminIn(AccountIn):
-    unit_id: int
-
-
 class UserAccountIn(AccountIn):
-    # A unit_admin creates users in their own unit and may leave this out; a
-    # super_admin has to say which unit.
-    unit_id: int | None = None
-
-
-class MoveUnitIn(BaseModel):
-    """Where to move an account that lives in a unit. Its role is unchanged by the move."""
-    unit_id: int
+    # An org_admin creates users in their own organization and may leave this out; a
+    # super_admin has to say which organization.
+    organization_id: int | None = None
 
 
 class MoveOrganizationIn(BaseModel):
-    """The same, for the one role that does not live in a unit: an organization's admin
-    belongs to the organization directly, so its «ویرایش» is this and not `MoveUnitIn`."""
+    """Where to move an account — an org_admin or a plain user, both of which carry
+    `organization_id` directly now that there is no unit level between them. Its role is
+    unchanged by the move."""
     organization_id: int
 
 
@@ -225,6 +215,11 @@ class PasswordResetIn(BaseModel):
     """An admin setting a password for someone below them. The old password is not
     required — the point is to restore access to an account whose password is lost."""
     password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def _password_strength(cls, value: str) -> str:
+        return _validate_password_strength(value)
 
 
 class SelfPasswordIn(BaseModel):
@@ -240,6 +235,11 @@ class SelfPasswordIn(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=8, max_length=128)
 
+    @field_validator("new_password")
+    @classmethod
+    def _password_strength(cls, value: str) -> str:
+        return _validate_password_strength(value)
+
 
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -253,9 +253,8 @@ class UserOut(BaseModel):
     last_name: str | None = None
     role: str
     is_active: bool = True
-    # As stored: an org_admin carries organization_id, everyone below carries unit_id.
+    # As stored: both org_admin and user carry organization_id directly now.
     organization_id: int | None = None
-    unit_id: int | None = None
 
     @computed_field
     @property
@@ -264,11 +263,9 @@ class UserOut(BaseModel):
 
 
 class MeOut(UserOut):
-    """`role` plus where the caller sits, resolved: a unit_admin or user reaches their
-    organization through their unit, so `organization` is filled in for them here even
-    though the column is NULL."""
+    """`role` plus where the caller sits, resolved: `organization` is filled in from
+    `organization_id`, which every non-super_admin role carries directly now."""
     organization: OrganizationOut | None = None
-    unit: UnitOut | None = None
 
 
 class SearchIn(BaseModel):
@@ -550,12 +547,6 @@ class RoleCount(BaseModel):
     count: int
 
 
-class UnitCount(BaseModel):
-    unit_id: int
-    name: str
-    accounts: int
-
-
 class JobStats(BaseModel):
     """The dataset and the caller's own share of it.
 
@@ -576,24 +567,21 @@ class JobStats(BaseModel):
 
 class StatsOut(BaseModel):
     """Aggregates for the dashboard, scoped exactly as `GET /accounts` is: everything
-    for a super_admin, one organization for an org_admin, one unit for a unit_admin.
+    for a super_admin, one organization for an org_admin.
 
     Counts only — nothing here identifies an account, so it answers the same questions
     the account list would without handing over the list.
     """
-    scope: str                      # 'global' | 'organization' | 'unit'
+    scope: str                      # 'global' | 'organization'
     scope_name: str | None
     organizations: int
-    units: int
     accounts: int
     accounts_active: int
     accounts_blocked: int
     accounts_by_role: list[RoleCount]
-    accounts_per_unit: list[UnitCount]
     jobs: JobStats
     # Creation dates, for the monthly bars. `organizations_series` is only ever
     # interesting to a super_admin; the others follow the caller's scope.
     accounts_series: list[SeriesPoint]
-    units_series: list[SeriesPoint]
     organizations_series: list[SeriesPoint]
     suggestions_series: list[SeriesPoint]

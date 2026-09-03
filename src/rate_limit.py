@@ -167,7 +167,7 @@ def login_key(request: Request, username: str) -> str:
 def search_rate_limit(user: User = Depends(get_current_user)) -> User:
     """`/search`'s dependency, in place of `get_current_user`: authenticate first, then
     charge the account. An anonymous caller gets the 401 it deserves rather than a 429,
-    and the budget belongs to an account instead of to an IP that a whole unit shares.
+    and the budget belongs to an account instead of to an IP a whole organization shares.
     """
     search_limiter.spend(f"user:{user.id}")
     return user

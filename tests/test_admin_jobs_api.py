@@ -150,7 +150,7 @@ def test_the_other_statuses_are_reachable_but_never_by_default(as_user, world, c
     assert [it["job_title"] for it in body["items"]] == ["افسران پیشنهادی"]
 
 
-@pytest.mark.parametrize("account", ["admin_a", "admin_a1", "user_a1"])
+@pytest.mark.parametrize("account", ["admin_a", "user_a1", "user_a2"])
 def test_only_a_super_admin_may_read_the_corpus(as_user, world, corpus, account):
     assert as_user(getattr(world, account))("GET", "/admin/jobs").status_code == 403
 
@@ -215,9 +215,9 @@ def test_every_column_is_required(as_user, world, corpus, rebuilds):
     assert rebuilds == []
 
 
-@pytest.mark.parametrize("account", ["admin_a", "admin_a1", "user_a1"])
+@pytest.mark.parametrize("account", ["admin_a", "user_a1", "user_a2"])
 def test_only_a_super_admin_may_edit_the_corpus(as_user, world, corpus, rebuilds, account):
-    """Moderation is super-admin-only whatever authority an org or unit admin has inside
+    """Moderation is super-admin-only whatever authority an org_admin has inside
     their own tenancy: there is one shared corpus, and it is not an organization's."""
     response = as_user(getattr(world, account))(
         "PUT", f"/admin/jobs/{corpus[0].id}", json=edited(job_title="عنوان دیگر"))
