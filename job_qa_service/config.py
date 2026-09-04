@@ -23,15 +23,25 @@ SECONDARY_MIN    = 0.50
 SECONDARY_MARGIN = 0.01
 PAIR_SIM_MAX     = 0.85
 
-DISCOVERY_MATCH   = 0.60
-DISCOVERY_FLOOR   = 0.35
-DISCOVERY_RELATED = 3
+DISCOVERY_FLOOR      = 0.35
+DISCOVERY_CANDIDATES = 3
+DISCOVERY_RELATED    = 3
+DISCOVERY_MATCH      = 0.60
 
-NAMED_JOB_SPARSE = 0.40
+# The bar a *typed job name* answers from its leader on when the model cannot be read
+# (an outage, or use_llm=False). Looser than THRESHOLD_SPARSE on purpose: this route
+# used to gate every bare name on it, and it survives as the offline rule only.
+NAMED_JOB_SPARSE     = 0.40
+
 
 PREVIEW_ITEMS = 5
 
 SELECT_MAX_TOKENS = 300
+# The composed record is a ten-column merge of the retrieved records and the request, so
+# it is several times the size of the "match" reply the same call makes on the other
+# branch; truncated JSON parses as nothing and costs the whole generation.
+RESOLVE_MAX_TOKENS = 1500
+ADAPTED_MAX_TOKENS = 700
 
 PROFILE_TOP_N        = 5
 PROFILE_W_DENSE      = 0.5

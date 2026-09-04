@@ -101,7 +101,8 @@ def run(engine, sample_idx, fixture_rows):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(
+        description="Offline accuracy probe: answers corpus-derived questions with use_llm=False.")
     parser.add_argument("--sample", type=int, default=150,
                         help="records the generated probes are built from (default 150)")
     parser.add_argument("--seed", type=int, default=0)

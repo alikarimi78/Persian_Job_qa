@@ -12,12 +12,13 @@ from . import profile as profile_match
 from .bm25 import BM25
 from .columns import (DISCOVERY_FIELDS, DISCOVERY_PRIMARY, EXPECTED_COLUMNS,
                       FIELD_LABELS, PROSE_COLUMNS, RANKED_FIELDS)
-from .config import (DISCOVERY_FLOOR, DISCOVERY_MATCH, DISCOVERY_RELATED,
-                     EMB_BATCH_SIZE, EMB_MAX_SEQ_LEN, EMBED_MODEL_NAME,
-                     MAX_CANDIDATES, NAMED_JOB_SPARSE, PAIR_SIM_MAX, PREVIEW_ITEMS,
-                     PROFILE_DENSE_ONLY, PROFILE_TOP_N, PROFILE_W_COVER, PROFILE_W_DENSE,
-                     RRF_K, SCAN_DEPTH, SECONDARY_MARGIN, SECONDARY_MIN, SELECT_MAX_TOKENS,
-                     THRESHOLD_MATCH, THRESHOLD_SPARSE, W_FULL, W_TITLE)
+from .config import (ADAPTED_MAX_TOKENS, DISCOVERY_CANDIDATES, DISCOVERY_FLOOR,
+                     DISCOVERY_MATCH, DISCOVERY_RELATED, EMB_BATCH_SIZE, EMB_MAX_SEQ_LEN,
+                     EMBED_MODEL_NAME, MAX_CANDIDATES, NAMED_JOB_SPARSE, PAIR_SIM_MAX,
+                     PREVIEW_ITEMS, PROFILE_DENSE_ONLY, PROFILE_TOP_N, PROFILE_W_COVER,
+                     PROFILE_W_DENSE, RESOLVE_MAX_TOKENS, RRF_K, SCAN_DEPTH,
+                     SECONDARY_MARGIN, SECONDARY_MIN, SELECT_MAX_TOKENS, THRESHOLD_MATCH,
+                     THRESHOLD_SPARSE, W_FULL, W_TITLE)
 from .emb_store import store
 from .intents import (EXPLICIT_COMBO_WORDS, INTENT_TO_FIELDS, detect_intent,
                       is_about_system, is_bare_name, is_greeting, is_job_request,
@@ -25,8 +26,9 @@ from .intents import (EXPLICIT_COMBO_WORDS, INTENT_TO_FIELDS, detect_intent,
 from .llm import LLMClient
 from .messages import (ABOUT_MESSAGE, DISCOVERY_NOT_REAL, DISCOVERY_UNAVAILABLE,
                        GREETING_MESSAGE, MATCH_HEADER, OOD_MESSAGE, PROFILE_NONE)
-from .prompts import (SYSTEM_INTERDISCIPLINARY, SYSTEM_ITEM_SELECT, SYSTEM_JOB_GENERATE,
-                      SYSTEM_JOB_MATCH, SYSTEM_PROFILE_ANALYZE, SYSTEM_SINGLE)
+from .prompts import (SYSTEM_ADAPTED, SYSTEM_INTERDISCIPLINARY, SYSTEM_ITEM_SELECT,
+                      SYSTEM_JOB_MATCH, SYSTEM_JOB_RESOLVE, SYSTEM_PROFILE_ANALYZE,
+                      SYSTEM_SINGLE)
 from .ranking import prefer_contained_title, prefer_dense_leader, prefer_title_match
 from .render import (build_context, field_items, job_detail, profile_context,
                      render_draft, template_one, template_profile, template_two)
@@ -82,6 +84,7 @@ class JobQAEngine:
     def __init__(self, data, rebuild_embeddings=False):
         self.df = self._load_data(data)
         self.titles = self.df["job_title"].tolist()
+        self.title_index = {normalize_text(t): i for i, t in enumerate(self.titles)}
 
         self.model = shared_model()
         self.emb_full, self.emb_title = self._load_or_build_embeddings(rebuild_embeddings)
@@ -174,71 +177,128 @@ class JobQAEngine:
         order = [i for i, _ in sorted(rrf.items(), key=lambda x: x[1], reverse=True)]
         return order, dense, sparse
 
-    def _generate_job(self, question, neighbour_idxs):
-        reference = "\n\n".join(
-            f"نمونه {n + 1}:\n{build_context(self.df.iloc[i], DISCOVERY_FIELDS)}"
-            for n, i in enumerate(neighbour_idxs))
+    def _resolve_job(self, question, candidate_idxs):
+        """Which job the user means, decided by the LLM over the retrieved candidates.
+
+        Returns a corpus row index when one of them *is* that job, a composed record when
+        none is and the job is worth writing one for, NOT_A_JOB when the request names no
+        real occupation, or None when the call failed or came back unusable.
+
+        The composed record is a *merge*: the candidates are handed over whole as the
+        material to build from, not as a writing sample to avoid repeating, so every
+        column comes out grounded in the corpus and adjusted to what the user asked for.
+        """
+        records = "\n\n".join(
+            f"رکورد {n}:\n{build_context(self.df.iloc[i], DISCOVERY_FIELDS)}"
+            for n, i in enumerate(candidate_idxs))
 
         raw = self.llm([
-            {"role": "system", "content": SYSTEM_JOB_GENERATE},
+            {"role": "system", "content": SYSTEM_JOB_RESOLVE},
             {"role": "user", "content":
                 f"درخواست کاربر:\n{question}\n\n"
-                f"مشاغل مشابه موجود (فقط برای الگوی سبک نگارش و پرهیز از تکرار):\n{reference}"},
-        ], temperature=0.5, max_tokens=900, clean=False, json_object=True)
+                f"رکوردهای نزدیک موجود در پایگاه داده:\n{records}"},
+        ], temperature=0.3, max_tokens=RESOLVE_MAX_TOKENS, clean=False, json_object=True)
 
         obj = parse_json_object(raw)
         if obj is None:
             return None
-        flag = obj.get("not_a_job")
-        if flag is True or str(flag).strip().lower() == "true":
+        decision = str(obj.get("decision", "")).strip().lower()
+        if decision == "not_a_job" or str(obj.get("not_a_job", "")).strip().lower() == "true":
             return NOT_A_JOB
+        if decision == "match":
+            try:
+                pick = int(obj.get("match_index"))
+            except (TypeError, ValueError):
+                return None
+            return candidate_idxs[pick] if 0 <= pick < len(candidate_idxs) else None
+
         draft = {c: normalize_text(obj.get(c, "")) for c in EXPECTED_COLUMNS}
         for col in PROSE_COLUMNS:
             draft[col] = re.sub(r"\s*\|\s*", "، ", draft[col]).strip("، ")
-        return draft if draft["job_title"] else None
+        if not draft["job_title"]:
+            return None
+        return self.title_index.get(draft["job_title"], draft)
 
-    def _discover(self, question, q_norm, use_llm=True, retrieved=None):
+    def _related_titles(self, order, answered=None):
+        """The nearest corpus records, for the user to see what the search actually held.
+
+        The record the answer is built from is dropped rather than listed next to
+        itself, and the slice is taken after that so the list is DISCOVERY_RELATED
+        long either way.
+        """
+        return [self.df.iloc[i]["job_title"] for i in order
+                if i != answered][:DISCOVERY_RELATED]
+
+    def _discover(self, question, q_norm, use_llm=True, retrieved=None, offline_match=None):
+        """Answer a job request, drafting the record when the corpus does not hold it.
+
+        `offline_match` is the rule applied when there is no reading to branch on — an
+        LLM outage, or `use_llm=False`. It takes the leader's dense and sparse scores
+        and says whether the leader is close enough to answer from. A described request
+        needs the strict `DISCOVERY_MATCH` bar, since a spec answered from a 0.52 record
+        is a wrong answer; a typed job name gets the looser lexical rule that the score
+        gate in front of this method used to apply before the model took the decision.
+        """
         if retrieved is None:
             retrieved = self._retrieve(q_norm)
         order, dense, sparse = retrieved
         i1 = order[0]
         s1_dense, s1_sparse = float(dense[i1]), float(sparse[i1])
-        related = [self.df.iloc[i]["job_title"] for i in order[:DISCOVERY_RELATED]]
+        related = self._related_titles(order)
+        refusal = {"mode": "out_of_domain", "intent": "job_request",
+                   "score": s1_dense, "related_jobs": related}
 
         if s1_dense < DISCOVERY_FLOOR and s1_sparse < THRESHOLD_SPARSE:
             return {"mode": "out_of_domain", "intent": "job_request",
                     "score": s1_dense, "answer": OOD_MESSAGE}
 
-        if s1_dense >= DISCOVERY_MATCH:
-            row = self.df.iloc[i1]
+        resolved = (self._resolve_job(question, order[:DISCOVERY_CANDIDATES])
+                    if use_llm else None)
+
+        if resolved is NOT_A_JOB:
+            return refusal | {"answer": DISCOVERY_NOT_REAL}
+        offline_match = offline_match or (lambda dense_, sparse_: dense_ >= DISCOVERY_MATCH)
+        if resolved is None and offline_match(s1_dense, s1_sparse):
+            resolved = i1
+        if resolved is None:
+            return refusal | {"answer": DISCOVERY_UNAVAILABLE}
+
+        if isinstance(resolved, int):
+            row = self.df.iloc[resolved]
             ans, (picks,) = self._answer_and_select([
                 {"role": "system", "content": SYSTEM_JOB_MATCH},
                 {"role": "user", "content":
                     f"اطلاعات شغل:\n{build_context(row, DISCOVERY_FIELDS)}\n\n"
-                    f"توصیف کاربر: {question}"},
+                    f"خواسته کاربر: {question}"},
             ], question, [row], use_llm)
             if not ans:
                 ans = f"{MATCH_HEADER}\n\n{template_one(row, DISCOVERY_FIELDS)}"
             return {"mode": "job_match", "intent": "job_request",
-                    "job": row["job_title"], "score": s1_dense,
-                    "related_jobs": related, "answer": ans,
+                    "job": row["job_title"], "score": float(dense[resolved]),
+                    "related_jobs": self._related_titles(order, resolved), "answer": ans,
                     "details": [job_detail(row, DISCOVERY_PRIMARY, picks)]}
 
-        draft = self._generate_job(question, order[:DISCOVERY_RELATED]) if use_llm else None
-        if draft is NOT_A_JOB:
-            return {"mode": "out_of_domain", "intent": "job_request",
-                    "score": s1_dense, "related_jobs": related,
-                    "answer": DISCOVERY_NOT_REAL + "\n" + "\n".join(f"- {t}" for t in related)}
-        if draft is None:
-            return {"mode": "out_of_domain", "intent": "job_request",
-                    "score": s1_dense, "related_jobs": related,
-                    "answer": DISCOVERY_UNAVAILABLE + "\n" + "\n".join(f"- {t}" for t in related)}
-
         return {"mode": "job_generated", "intent": "job_request",
-                "job": draft["job_title"], "score": s1_dense,
-                "job_draft": draft, "related_jobs": related,
-                "answer": render_draft(draft, related),
-                "details": [job_detail(draft, DISCOVERY_PRIMARY)]}
+                "job": resolved["job_title"], "score": s1_dense,
+                "job_draft": resolved, "related_jobs": related,
+                "answer": render_draft(resolved),
+                "details": [job_detail(resolved, DISCOVERY_PRIMARY)]}
+
+    def _adapted_answer(self, question, record, use_llm):
+        """The prose for a composed record — written from the record, not from the corpus.
+
+        One source for the whole card: the sentences above the boxes and the boxes
+        themselves are the same record, so they cannot disagree the way a corpus record
+        and an answer adapted away from it could.
+        """
+        if not use_llm:
+            return ""
+        return self.llm([
+            {"role": "system", "content": SYSTEM_ADAPTED},
+            {"role": "user", "content":
+                f"رکورد تدوین‌شده:\n{build_context(record, DISCOVERY_FIELDS)}\n\n"
+                f"سوال کاربر: {question}"},
+        ], temperature=0.3, max_tokens=ADAPTED_MAX_TOKENS)
 
     def _select_items(self, question, row):
         columns = {}
@@ -340,9 +400,11 @@ class JobQAEngine:
         i1 = order[0]
         s1_dense, s1_sparse = float(dense[i1]), float(sparse[i1])
 
-        if (bare_name and s1_dense < THRESHOLD_MATCH and s1_sparse < NAMED_JOB_SPARSE
-                and names_an_occupation(q)):
-            return self._discover(question, q, use_llm, (order, dense, sparse))
+        if bare_name and names_an_occupation(q):
+            return self._discover(
+                question, q, use_llm, (order, dense, sparse),
+                offline_match=lambda dense_, sparse_: (dense_ >= THRESHOLD_MATCH
+                                                       or sparse_ >= NAMED_JOB_SPARSE))
 
         if s1_dense < THRESHOLD_MATCH and s1_sparse < THRESHOLD_SPARSE:
             return {"mode": "out_of_domain", "intent": intent,
@@ -356,13 +418,13 @@ class JobQAEngine:
         if i2 is not None:
             s2_dense = float(dense[i2])
             interdisciplinary = (
-                (s2_dense >= SECONDARY_MIN and abs(s1_dense - s2_dense) <= SECONDARY_MARGIN)
+                (not bare_name and s2_dense >= SECONDARY_MIN
+                 and abs(s1_dense - s2_dense) <= SECONDARY_MARGIN)
                 or (explicit and s2_dense >= THRESHOLD_MATCH - 0.05)
             )
 
-        row1 = self.df.iloc[i1]
-
         if interdisciplinary:
+            row1 = self.df.iloc[i1]
             row2 = self.df.iloc[i2]
             ans, (picks1, picks2) = self._answer_and_select([
                 {"role": "system", "content": SYSTEM_INTERDISCIPLINARY},
@@ -378,6 +440,33 @@ class JobQAEngine:
                     "details": [job_detail(row1, fields, picks1),
                                 job_detail(row2, fields, picks2)]}
 
+        # A question is resolved the way a request is, and for the same reason: retrieval
+        # ranks by topic, so its leader is the *nearest* job rather than the one asked
+        # about, and the two are answered differently. Where a candidate is the job, the
+        # stored record answers it; where none is, the record composed for the user's own
+        # job does — its columns, not a neighbour's, are what the boxes then show.
+        resolved = (self._resolve_job(question, order[:DISCOVERY_CANDIDATES])
+                    if use_llm else None)
+
+        if resolved is NOT_A_JOB:
+            return {"mode": "out_of_domain", "intent": intent, "score": s1_dense,
+                    "related_jobs": self._related_titles(order), "answer": OOD_MESSAGE}
+
+        if isinstance(resolved, dict):
+            ans = self._adapted_answer(question, resolved, use_llm)
+            if not ans:
+                ans = template_one(resolved, fields)
+            # Every neighbour is kept: none of them is the answer, and they are how the
+            # user checks that the corpus really does lack the job just described to them.
+            return {"mode": "job_adapted", "intent": intent,
+                    "job": resolved["job_title"], "score": s1_dense, "answer": ans,
+                    "related_jobs": self._related_titles(order),
+                    "details": [job_detail(resolved, fields)]}
+
+        if isinstance(resolved, int):
+            i1, s1_dense = resolved, float(dense[resolved])
+        row1 = self.df.iloc[i1]
+
         ans, (picks,) = self._answer_and_select([
             {"role": "system", "content": SYSTEM_SINGLE},
             {"role": "user", "content":
@@ -387,4 +476,5 @@ class JobQAEngine:
             ans = template_one(row1, fields)
         return {"mode": "single", "intent": intent, "job": row1["job_title"],
                 "score": s1_dense, "answer": ans,
+                "related_jobs": self._related_titles(order, i1),
                 "details": [job_detail(row1, fields, picks)]}

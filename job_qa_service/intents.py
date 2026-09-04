@@ -114,15 +114,22 @@ def is_bare_name(question):
     return detect_intent(question) == "general"
 
 
+def _is_agentive(word):
+    if word in _NOT_OCCUPATIONS:
+        return False
+    return any(word.endswith(s) and len(word) - len(s) >= _AGENTIVE_STEM_MIN
+               for s in _AGENTIVE_SUFFIXES)
+
+
 def names_an_occupation(question):
     for token in _tokens(question):
         if any(token.startswith(head) for head in OCCUPATION_HEADS):
             return True
         for word in _forms(token.replace("\u200c", "")):
-            if word in _NOT_OCCUPATIONS:
-                continue
-            if any(word.endswith(s) and len(word) - len(s) >= _AGENTIVE_STEM_MIN
-                   for s in _AGENTIVE_SUFFIXES):
+            # The activity noun of an agentive stem names the same work the stem does:
+            # «لوله‌کشی» is «لوله‌کش» + ی, «برنامه‌نویسی» is «برنامه‌نویس» + ی. Without this
+            # the whole family — کشی، نویسی، گری، سازی، شناسی — read as not-an-occupation.
+            if _is_agentive(word) or (word.endswith("ی") and _is_agentive(word[:-1])):
                 return True
     return False
 

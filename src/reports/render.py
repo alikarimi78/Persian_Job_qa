@@ -22,8 +22,15 @@ COLOPHON = "این گزارش به‌صورت خودکار از پاسخ سام�
 
 SENTENCE_LISTS = {"responsibilities"}
 
+# What the line under the question calls the job the answer is about — and, through
+# `_related`, the set of modes whose subject is dropped from the neighbour list. Both
+# `single` and `job_adapted` name the job the *user* asked about (the engine resolves
+# the question to one before answering), so both belong here; `about` and
+# `out_of_domain` carry no job at all.
 MATCHED_LABEL = {
+    "single": "شغل مورد پرسش",
     "job_match": "شغل منطبق",
+    "job_adapted": "شغل مورد پرسش",
     "job_generated": "شغل پیشنهادی",
     "interdisciplinary": "مشاغل منطبق",
 }
@@ -32,6 +39,9 @@ NOTICE = {
     "job_generated": "این شغل هنوز در پایگاه داده ثبت نشده است؛ آنچه در ادامه می‌آید "
                      "پیشنهاد سامانه است و تا تایید مدیر سامانه، بخشی از پایگاه داده "
                      "به شمار نمی‌رود.",
+    "job_adapted": "این شغل در پایگاه داده ثبت نشده است؛ مشخصات آن بر اساس پرسش شما و "
+                   "نزدیک‌ترین رکوردهای پایگاه داده تدوین شده و بخشی از پایگاه داده به "
+                   "شمار نمی‌رود.",
     "out_of_domain": "این پرسش خارج از دامنه مشاغل سامانه تشخیص داده شد، بنابراین "
                      "گزارش شامل مشخصات هیچ شغلی نیست.",
 }

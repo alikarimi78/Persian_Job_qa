@@ -117,6 +117,31 @@ def test_matched_job_is_not_listed_as_its_own_neighbour():
     assert "افسران توپخانه و موشک" not in related
 
 
+def test_a_single_answer_names_the_job_it_was_asked_about():
+    html = build_html(
+        ReportIn(**payload(related_jobs=["افسران توپخانه و موشک", "خدمه توپخانه و موشک"])),
+        Caller(), None, None)
+    related = next(line for line in html.splitlines() if 'class="related"' in line)
+
+    assert "شغل مورد پرسش" in html
+    assert "خدمه توپخانه و موشک" in related
+    assert "افسران توپخانه و موشک" not in related
+
+
+def test_a_composed_record_is_marked_as_unregistered():
+    html = build_html(
+        ReportIn(**payload(mode="job_adapted", job="تعمیرکار پهپاد کشاورزی",
+                           related_jobs=["اپراتورهای پهپاد تاکتیکی"])),
+        Caller(), None, None)
+    related = next(line for line in html.splitlines() if 'class="related"' in line)
+
+    assert "تعمیرکار پهپاد کشاورزی" in html
+    assert "در پایگاه داده ثبت نشده" in html
+    # The record was composed, so every retrieved neighbour is still a corpus title the
+    # reader should see — none of them is the job the report is about.
+    assert "اپراتورهای پهپاد تاکتیکی" in related
+
+
 def test_out_of_domain_report_has_no_job_section():
     html = build_html(ReportIn(**payload(mode="out_of_domain", job=None, details=[])),
                       Caller(), None, None)
@@ -186,7 +211,7 @@ def test_report_is_dated_in_tehran_not_utc():
 
 
 def test_the_pdf_itself_renders_for_every_mode():
-    for mode in ("single", "job_match", "job_generated", "interdisciplinary",
-                 "out_of_domain"):
+    for mode in ("single", "job_match", "job_adapted", "job_generated",
+                 "interdisciplinary", "out_of_domain"):
         pdf = render_pdf(ReportIn(**payload(mode=mode)), Caller(), "org-a")
         assert pdf.startswith(b"%PDF-"), mode

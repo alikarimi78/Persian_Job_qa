@@ -1,7 +1,7 @@
 from .columns import (DETAIL_FIELDS, EMPTY_CELLS, FIELD_LABELS, PROSE_COLUMNS)
 from .config import PREVIEW_ITEMS
 from .messages import (DRAFT_HEADER, DRAFT_QUESTION, PROFILE_COVER_LABEL, PROFILE_HEADER,
-                       PROFILE_MISSING_LABEL, RELATED_LABEL)
+                       PROFILE_MISSING_LABEL)
 
 
 def build_context(row, fields, include_title=True):
@@ -24,12 +24,10 @@ def template_two(row1, row2, fields):
             f"— {row2['job_title']}:\n{build_context(row2, fields, include_title=False)}")
 
 
-def render_draft(draft, related):
+def render_draft(draft):
     lines = [DRAFT_HEADER, "", f"📌 {FIELD_LABELS['job_title']}: {draft['job_title']}"]
     if draft.get("description"):
         lines.append(f"{FIELD_LABELS['description']}: {draft['description']}")
-    if related:
-        lines += ["", f"{RELATED_LABEL}: " + "، ".join(related)]
     lines += ["", DRAFT_QUESTION]
     return "\n".join(lines)
 
