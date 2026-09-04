@@ -6,9 +6,9 @@ from typing import Callable
 
 from fastapi import Depends, HTTPException, Request, status
 
-from .auth import get_current_user
 from .config import settings
 from .models import User
+from .security import get_current_user
 
 TOO_MANY_ATTEMPTS = "تعداد تلاش‌ها بیش از حد مجاز است؛ لطفاً {seconds} ثانیه دیگر مجدداً تلاش نمایید."
 TOO_MANY_SEARCHES = "تعداد جستجوها بیش از حد مجاز است؛ لطفاً {seconds} ثانیه دیگر مجدداً تلاش نمایید."

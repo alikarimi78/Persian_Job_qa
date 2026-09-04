@@ -2,8 +2,9 @@ from fastapi import HTTPException, status
 from prisma import Prisma
 from prisma.types import UserWhereInput
 
-from .auth import hash_password
-from .models import OrganizationSummary, Role, User, scope_organization_id
+from src.models import OrganizationSummary, Role, User, scope_organization_id
+from src.permissions import visible_scope
+from src.security import hash_password
 
 
 def get_account(db: Prisma, user_id: int) -> User:
@@ -13,13 +14,6 @@ def get_account(db: Prisma, user_id: int) -> User:
     return user
 
 
-def get_organization(db: Prisma, organization_id: int) -> OrganizationSummary:
-    org = OrganizationSummary.prisma(db).find_unique(where={"id": organization_id})
-    if org is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Organization not found")
-    return org
-
-
 def organization_of(db: Prisma, user: User) -> OrganizationSummary | None:
     organization_id = scope_organization_id(user)
     if organization_id is None:
@@ -27,30 +21,12 @@ def organization_of(db: Prisma, user: User) -> OrganizationSummary | None:
     return OrganizationSummary.prisma(db).find_unique(where={"id": organization_id})
 
 
-def assert_manages_organization(actor: User, organization_id: int) -> None:
-    if actor.role == Role.super_admin:
-        return
-    if actor.role == Role.org_admin and actor.organization_id == organization_id:
-        return
-    raise HTTPException(status.HTTP_403_FORBIDDEN, "Outside your organization")
-
-
-def assert_can_manage_account(actor: User, target: User) -> None:
-    if actor.id == target.id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot act on your own account")
-    if actor.role == Role.super_admin:
-        return
-    if actor.role == Role.org_admin:
-        if target.role == Role.user and target.organization_id == actor.organization_id:
-            return
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Outside your organization")
-    raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient role")
-
-
 def delete_account(db: Prisma, target: User) -> None:
     db.user.delete(where={"id": target.id})
 
 
+# Moving an org_admin needs an admin-free destination — `uq_users_org_admin` would
+# refuse it anyway, but a 409 naming the sitting admin is the useful answer.
 def move_to_organization(db: Prisma, target: User, organization: OrganizationSummary) -> User:
     if target.organization_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT,
@@ -102,12 +78,8 @@ def create_account(db: Prisma, *, username: str, password: str, role: Role,
     })
 
 
-def visible_scope(actor: User) -> UserWhereInput:
-    if actor.role == Role.super_admin:
-        return {}
-    return {"organization_id": actor.organization_id, "role": Role.user}
-
-
+# `GET /stats` counts what this returns, so it can never total what its caller could
+# not have listed.
 def visible_users(db: Prisma, actor: User, where: UserWhereInput | None = None,
                   order: str | None = None) -> list[User]:
     scope = visible_scope(actor)

@@ -2,10 +2,10 @@ import pytest
 from fastapi import HTTPException
 from prisma.errors import PrismaError
 
-from src.accounts import (assert_can_manage_account, assert_manages_organization,
-                          create_account, delete_account, move_to_organization,
-                          visible_users)
 from src.models import JobStatus, Role
+from src.permissions import assert_can_manage_account, assert_manages_organization
+from src.routers.accounts.service import (create_account, delete_account,
+                                          move_to_organization, visible_users)
 
 PASSWORD = "Password-1"
 

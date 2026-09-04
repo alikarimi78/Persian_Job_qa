@@ -149,7 +149,7 @@ def test_svg_is_not_an_accepted_logo_type(world, as_user):
 
 def test_an_oversized_logo_is_refused(world, as_user):
     import base64
-    from src.routers.orgs import MAX_LOGO_BYTES
+    from src.routers.orgs.service import MAX_LOGO_BYTES
     raw = b"\x89PNG\r\n\x1a\n" + b"\x00" * MAX_LOGO_BYTES
     payload = base64.b64encode(raw).decode()
     assert as_user(world.root)(

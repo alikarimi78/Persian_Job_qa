@@ -47,9 +47,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.auth import create_token, hash_password
 from src.database import connect, db as prisma, disconnect
 from src.models import Role, User
+from src.security import create_token, hash_password
 from src.routers import accounts as accounts_router
 from src.routers import admin as admin_router
 from src.routers import auth as auth_router

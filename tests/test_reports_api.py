@@ -1,8 +1,8 @@
 import pytest
 
-from src.reports import build_html, filename, printable, render_pdf
-from src.reports.jalali import fa_digits, format_datetime, to_jalali
-from src.schemas import ReportIn
+from src.routers.reports import build_html, filename, printable, render_pdf
+from src.routers.reports.jalali import fa_digits, format_datetime, to_jalali
+from src.routers.reports.schemas import ReportIn
 from datetime import datetime, timezone
 
 

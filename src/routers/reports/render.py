@@ -8,7 +8,7 @@ from fontTools.ttLib import TTFont
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from weasyprint import HTML
 
-from ..models import display_name
+from src.models import display_name
 from .jalali import date_slug, fa_digits, format_datetime, now
 
 log = logging.getLogger("reports")

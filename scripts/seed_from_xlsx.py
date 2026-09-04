@@ -2,10 +2,10 @@ import sys
 
 import pandas as pd
 
-from src.auth import hash_password
 from src.config import settings
 from src.database import connect, db, disconnect
 from src.models import JobStatus, Role
+from src.security import hash_password
 
 COLUMNS = ["job_title", "aliases", "tools", "skills", "knowledge", "abilities",
            "work_context", "career_path_next", "description", "responsibilities"]

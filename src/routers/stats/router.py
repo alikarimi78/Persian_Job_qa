@@ -4,12 +4,14 @@ from datetime import datetime
 from fastapi import APIRouter, Depends
 from prisma import Prisma
 
-from ..accounts import visible_users
-from ..auth import require_roles
-from ..database import get_db
-from ..engine_manager import manager
-from ..models import JobStatus, OrganizationSummary, Role, User, scope_organization_id
-from ..schemas import JobStats, RoleCount, SeriesPoint, StatsOut
+from src.database import get_db
+from src.engine_manager import manager
+from src.models import (JobStatus, OrganizationSummary, Role, User,
+                        scope_organization_id)
+from src.security import require_roles
+from src.routers.accounts.service import visible_users
+
+from .schemas import JobStats, RoleCount, SeriesPoint, StatsOut
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -29,6 +31,9 @@ def _visible_organizations(db: Prisma, actor: User) -> list[OrganizationSummary]
     return [org] if org is not None else []
 
 
+# Counts only, scoped the way `/accounts` is: the account totals come from
+# `visible_users`, so they can never exceed what this caller could have listed. The
+# `corpus_records`/`engine_records` gap is what a rebuild would pick up.
 @router.get("", response_model=StatsOut)
 def stats(actor: User = Depends(require_roles(Role.super_admin, Role.org_admin)),
           db: Prisma = Depends(get_db)):

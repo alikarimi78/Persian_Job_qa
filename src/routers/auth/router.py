@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from prisma import Prisma
 
-from ..accounts import organization_of, set_name, set_password
-from ..auth import create_token, get_current_user, verify_password
-from ..database import get_db
-from ..models import User
-from ..rate_limit import login_key, login_limiter
-from ..schemas import LoginIn, MeOut, NameIn, SelfPasswordIn, TokenOut, UserOut
+from src.database import get_db
+from src.models import User
+from src.rate_limit import login_key, login_limiter
+from src.security import create_token, get_current_user, verify_password
+from src.routers.accounts.schemas import NameIn, UserOut
+from src.routers.accounts.service import organization_of, set_name, set_password
+
+from .schemas import LoginIn, MeOut, SelfPasswordIn, TokenOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 

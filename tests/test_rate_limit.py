@@ -2,7 +2,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from src.auth import create_token
+from src.security import create_token
 from src.config import settings
 from src.rate_limit import (RateLimiter, client_ip, login_key, login_limiter,
                             search_limiter)

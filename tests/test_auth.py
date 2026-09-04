@@ -3,8 +3,8 @@ import pytest
 from fastapi import Depends
 from fastapi.testclient import TestClient
 
-from src.auth import (create_token, hash_password, require_roles, require_super_admin,
-                      verify_password)
+from src.security import (create_token, hash_password, require_roles,
+                          require_super_admin, verify_password)
 from src.config import settings
 from src.models import Role, User
 

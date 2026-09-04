@@ -2,16 +2,20 @@ from fastapi import APIRouter, Depends, Response
 from fastapi.concurrency import run_in_threadpool
 from prisma import Prisma
 
-from ..accounts import organization_of
-from ..auth import get_current_user
-from ..database import get_db
-from ..models import User
-from ..reports import filename, render_pdf
-from ..schemas import ReportIn
+from src.database import get_db
+from src.models import User
+from src.security import get_current_user
+from src.routers.accounts.service import organization_of
+
+from .render import filename, render_pdf
+from .schemas import ReportIn
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
 
+# The client posts back the answer it already holds and the server does not re-run the
+# search, the model not being deterministic. Identity is never taken from the body —
+# the masthead's user and organization come from the token.
 @router.post(
     "/search",
     response_class=Response,

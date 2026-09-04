@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends
 from prisma import Prisma
 
-from ..auth import get_current_user
-from ..database import get_db
-from ..models import User, JobStatus
-from ..schemas import JobIn, JobOut
+from src.database import get_db
+from src.models import JobStatus, User
+from src.security import get_current_user
+
+from .schemas import JobIn, JobOut
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
