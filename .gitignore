@@ -211,3 +211,4 @@ job_ner_model2/
 # Derived embedding cache: regenerated on demand and keyed by corpus fingerprint,
 # so a committed copy goes stale on any dataset edit. The Dockerfile never copies it.
 emb_cache/
+CLAUDE.full.md

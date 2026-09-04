@@ -177,17 +177,12 @@ class JobQAEngine:
         order = [i for i, _ in sorted(rrf.items(), key=lambda x: x[1], reverse=True)]
         return order, dense, sparse
 
+    # Which job the user means, decided by the LLM over the retrieved candidates: a
+    # corpus row index when one of them *is* that job, a composed record when none is,
+    # NOT_A_JOB when the request names no real occupation, None when the call failed.
+    # The composed record is a *merge* — the candidates are handed over whole as the
+    # material to build from, not as a writing sample to avoid repeating.
     def _resolve_job(self, question, candidate_idxs):
-        """Which job the user means, decided by the LLM over the retrieved candidates.
-
-        Returns a corpus row index when one of them *is* that job, a composed record when
-        none is and the job is worth writing one for, NOT_A_JOB when the request names no
-        real occupation, or None when the call failed or came back unusable.
-
-        The composed record is a *merge*: the candidates are handed over whole as the
-        material to build from, not as a writing sample to avoid repeating, so every
-        column comes out grounded in the corpus and adjusted to what the user asked for.
-        """
         records = "\n\n".join(
             f"رکورد {n}:\n{build_context(self.df.iloc[i], DISCOVERY_FIELDS)}"
             for n, i in enumerate(candidate_idxs))
@@ -219,26 +214,19 @@ class JobQAEngine:
             return None
         return self.title_index.get(draft["job_title"], draft)
 
+    # The nearest corpus records, so the user can see what the search actually held.
+    # `answered` is dropped before the slice rather than after it, so the list is
+    # DISCOVERY_RELATED long either way and no record is printed beside itself.
     def _related_titles(self, order, answered=None):
-        """The nearest corpus records, for the user to see what the search actually held.
-
-        The record the answer is built from is dropped rather than listed next to
-        itself, and the slice is taken after that so the list is DISCOVERY_RELATED
-        long either way.
-        """
         return [self.df.iloc[i]["job_title"] for i in order
                 if i != answered][:DISCOVERY_RELATED]
 
+    # Answers a job request, composing the record when the corpus does not hold it.
+    # `offline_match(dense, sparse)` is the rule applied when there is no reading to
+    # branch on — an outage, or use_llm=False. A *described* request needs the strict
+    # DISCOVERY_MATCH bar, since a spec answered from a 0.52 record is a wrong answer;
+    # a *typed name* gets the looser lexical rule the score gate here used to apply.
     def _discover(self, question, q_norm, use_llm=True, retrieved=None, offline_match=None):
-        """Answer a job request, drafting the record when the corpus does not hold it.
-
-        `offline_match` is the rule applied when there is no reading to branch on — an
-        LLM outage, or `use_llm=False`. It takes the leader's dense and sparse scores
-        and says whether the leader is close enough to answer from. A described request
-        needs the strict `DISCOVERY_MATCH` bar, since a spec answered from a 0.52 record
-        is a wrong answer; a typed job name gets the looser lexical rule that the score
-        gate in front of this method used to apply before the model took the decision.
-        """
         if retrieved is None:
             retrieved = self._retrieve(q_norm)
         order, dense, sparse = retrieved
@@ -284,13 +272,10 @@ class JobQAEngine:
                 "answer": render_draft(resolved),
                 "details": [job_detail(resolved, DISCOVERY_PRIMARY)]}
 
+    # The prose for a composed record, written from that record and not from the corpus
+    # row it grew out of: one source for the whole card, so the sentences above the boxes
+    # and the boxes themselves cannot disagree.
     def _adapted_answer(self, question, record, use_llm):
-        """The prose for a composed record — written from the record, not from the corpus.
-
-        One source for the whole card: the sentences above the boxes and the boxes
-        themselves are the same record, so they cannot disagree the way a corpus record
-        and an answer adapted away from it could.
-        """
         if not use_llm:
             return ""
         return self.llm([
