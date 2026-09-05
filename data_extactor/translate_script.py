@@ -15,8 +15,10 @@ import time
 from pathlib import Path
 
 import pandas as pd
-import openai
-from openai import OpenAI
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types as genai_types
+import httpx
 
 
 HERE = Path(__file__).resolve().parent
@@ -26,20 +28,20 @@ try:
 except (AttributeError, ValueError):
     pass
 
-logging.getLogger("openai").setLevel(logging.ERROR)
+logging.getLogger("google_genai.models").setLevel(logging.ERROR)
 logging.getLogger("httpx").setLevel(logging.ERROR)
 
-KEY_ENV_NAMES = ("XKIRO_API_KEY", "OPENAI_API_KEY")
-ENV_KEYS = [(name, os.environ[name]) for name in KEY_ENV_NAMES if os.environ.get(name)]
+# every GEMINI_API_KEY* in the environment is used, rotating when one runs out of quota
+KEY_ENV_PREFIX = "GEMINI_API_KEY"
+ENV_KEYS = [(name, os.environ[name]) for name in sorted(os.environ)
+            if name.startswith(KEY_ENV_PREFIX) and os.environ[name]]
 
-BASE_URL = os.environ.get("TRANSLATE_BASE_URL", "https://api.xkiro.com/v1")
-
-MODEL = os.environ.get("TRANSLATE_MODEL", "openai/gpt-5.6-luna")
+MODEL = os.environ.get("TRANSLATE_MODEL", "gemini-3.8-flash")
 
 MAX_OUTPUT_TOKENS = 65536
 
-# only sent when set — many models reject the parameter
-REASONING_EFFORT = os.environ.get("TRANSLATE_REASONING_EFFORT", "")
+# "none" switches thinking off entirely; anything else leaves the model's default budget
+REASONING_EFFORT = os.environ.get("TRANSLATE_REASONING_EFFORT", "none")
 
 TRANSLATE_TOOLS = True
 
@@ -343,57 +345,24 @@ def validate(src: pd.DataFrame, out: pd.DataFrame, cols: list[str]) -> list[str]
     return errs
 
 
-_DROPPED_PARAMS: set[str] = set()
-_PARAM_LOCK = threading.Lock()
-
-_PARAM_CANDIDATES = ("temperature", "max_tokens", "max_completion_tokens",
-                     "reasoning_effort")
-
-
-def _build_kwargs(model: str, user_text: str) -> dict:
-    with _PARAM_LOCK:
-        dropped = set(_DROPPED_PARAMS)
-
-    kwargs: dict = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_text},
-        ],
-    }
-    if "temperature" not in dropped:
-        kwargs["temperature"] = 0
-    if "max_tokens" not in dropped:
-        kwargs["max_tokens"] = MAX_OUTPUT_TOKENS
-    elif "max_completion_tokens" not in dropped:
-        kwargs["max_completion_tokens"] = MAX_OUTPUT_TOKENS
-    if REASONING_EFFORT and "reasoning_effort" not in dropped:
-        kwargs["reasoning_effort"] = REASONING_EFFORT
-    return kwargs
+def _build_config() -> genai_types.GenerateContentConfig:
+    kwargs = dict(
+        system_instruction=SYSTEM_PROMPT,
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+        temperature=0.2,
+        top_p=0.95,
+    )
+    if REASONING_EFFORT == "none":
+        kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_budget=0)
+    return genai_types.GenerateContentConfig(**kwargs)
 
 
-def _drop_bad_param(message: str) -> str:
-    """A 400 naming a parameter the endpoint does not take — remember it and move on."""
-    text = str(message).lower()
-    for name in _PARAM_CANDIDATES:
-        if name in text:
-            with _PARAM_LOCK:
-                if name in _DROPPED_PARAMS:
-                    continue
-                _DROPPED_PARAMS.add(name)
-            return name
-    return ""
-
-
-def read_usage(resp) -> dict:
-    u = getattr(resp, "usage", None)
-    if u is None:
-        return new_usage()
-    details = getattr(u, "completion_tokens_details", None)
+def read_usage(resp: genai_types.GenerateContentResponse) -> dict:
+    u = resp.usage_metadata
     return {
-        "in": int(getattr(u, "prompt_tokens", 0) or 0),
-        "out": int(getattr(u, "completion_tokens", 0) or 0),
-        "think": int(getattr(details, "reasoning_tokens", 0) or 0),
+        "in": int(getattr(u, "prompt_token_count", 0) or 0),
+        "out": int(getattr(u, "candidates_token_count", 0) or 0),
+        "think": int(getattr(u, "thoughts_token_count", 0) or 0),
     }
 
 
@@ -413,42 +382,38 @@ def fmt_usage(u: dict) -> str:
             + (f" ({u['think']:,} thinking)" if u.get("think") else ""))
 
 
-_CLIENTS: dict[tuple[str, str], OpenAI] = {}
+_CLIENTS: dict[str, genai.Client] = {}
 _CLIENTS_LOCK = threading.Lock()
 
 
-def client_for(api_key: str, base_url: str, timeout: int) -> OpenAI:
+def client_for(api_key: str, timeout: int) -> genai.Client:
     with _CLIENTS_LOCK:
-        client = _CLIENTS.get((api_key, base_url))
+        client = _CLIENTS.get(api_key)
         if client is None:
-            client = OpenAI(
-                api_key=api_key or "no-key-needed",
-                base_url=base_url,
-                timeout=float(timeout),
-                max_retries=0,          # retrying is this script's job
-            )
-            _CLIENTS[(api_key, base_url)] = client
+            client = genai.Client(
+                api_key=api_key,
+                http_options=genai_types.HttpOptions(timeout=int(timeout * 1000)))
+            _CLIENTS[api_key] = client
         return client
 
 
-_RETRY_AFTER_RE = re.compile(r"retry (?:in|after) ([0-9.]+)\s*s", re.IGNORECASE)
+_RETRY_AFTER_RE = re.compile(r"retry in ([0-9.]+)\s*s", re.IGNORECASE)
 
 
-def retry_delay(exc: Exception) -> float:
-    resp = getattr(exc, "response", None)
-    headers = getattr(resp, "headers", None)
-    if headers is not None and hasattr(headers, "get"):
-        for h in ("retry-after", "x-ratelimit-reset-requests",
-                  "x-ratelimit-reset-tokens"):
-            raw = headers.get(h)
-            if not raw:
-                continue
-            m = re.match(r"([0-9.]+)\s*(ms|s|m)?$", str(raw).strip())
-            if m:
-                value = float(m.group(1))
-                unit = m.group(2)
-                return value / 1000 if unit == "ms" else value * 60 if unit == "m" else value
-    m = _RETRY_AFTER_RE.search(str(getattr(exc, "message", "") or exc))
+def retry_delay(exc: genai_errors.APIError) -> float:
+    stack = [getattr(exc, "details", None)]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            raw = node.get("retryDelay")
+            if raw is not None:
+                m = re.match(r"([0-9.]+)s?$", str(raw).strip())
+                if m:
+                    return float(m.group(1))
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    m = _RETRY_AFTER_RE.search(str(getattr(exc, "message", "") or ""))
     return float(m.group(1)) if m else 0.0
 
 
@@ -458,9 +423,9 @@ def short(message: str, limit: int = 160) -> str:
 
 
 def quota_note(message: str) -> str:
-    flat = " ".join(str(message).split())
-    m = re.search(r"limit:?\s*(\d+)", flat)
-    return f"limit {m.group(1)}" if m else short(flat, 80)
+    m = re.search(r"metric:\s*\S*?/([^\s,]+),?\s*limit:\s*(\d+)",
+                  " ".join(str(message).split()))
+    return f"{m.group(1)} limit {m.group(2)}" if m else short(message, 80)
 
 
 class KeyRing:
@@ -507,60 +472,44 @@ class KeyRing:
                     and time.time() - self._last_ok >= QUOTA_GIVE_UP)
 
 
-def call_llm(api_key: str, base_url: str, model: str, user_text: str,
+def call_llm(api_key: str, model: str, user_text: str,
              timeout: int = 900) -> tuple[str, dict]:
-    client = client_for(api_key, base_url, timeout)
-
-    resp = None
-    for _ in range(len(_PARAM_CANDIDATES) + 1):
-        try:
-            resp = client.chat.completions.create(**_build_kwargs(model, user_text))
-            break
-        except openai.BadRequestError as exc:
-            dropped = _drop_bad_param(getattr(exc, "message", "") or str(exc))
-            if not dropped:
-                raise RuntimeError(f"400 {short(exc.message, 400)}") from exc
-            print(f"  note: the endpoint rejects '{dropped}', "
-                  f"sending the request without it", file=sys.stderr)
-            continue
-        except openai.RateLimitError as exc:
+    client = client_for(api_key, timeout)
+    try:
+        resp = client.models.generate_content(
+            model=model, contents=user_text, config=_build_config())
+    except genai_errors.ServerError as exc:
+        raise TransientError(f"{exc.code} {short(exc.message)}",
+                             retry_delay(exc)) from exc
+    except genai_errors.ClientError as exc:
+        if exc.code == 429:
             delay = retry_delay(exc)
             raise TransientError(
-                f"429 out of quota ({quota_note(getattr(exc, 'message', '') or exc)})"
+                f"429 out of quota ({quota_note(str(exc.message))})"
                 + (f", server asks for {delay:.0f}s" if delay else ""),
                 delay, quota=True) from exc
-        except openai.APITimeoutError as exc:
-            raise TransientError(f"timeout after {timeout}s: {short(exc)}") from exc
-        except openai.APIConnectionError as exc:
-            raise TransientError(f"{type(exc).__name__}: {short(exc)}") from exc
-        except openai.APIStatusError as exc:
-            if exc.status_code >= 500:
-                raise TransientError(
-                    f"{exc.status_code} {short(getattr(exc, 'message', '') or exc)}",
-                    retry_delay(exc)) from exc
-            raise RuntimeError(
-                f"{exc.status_code} "
-                f"{short(getattr(exc, 'message', '') or exc, 400)}") from exc
-    if resp is None:
-        raise TransientError("the endpoint kept rejecting the request parameters")
+        raise RuntimeError(f"{exc.code} {short(exc.message, 400)}") from exc
+    except httpx.TimeoutException as exc:
+        raise TransientError(f"{type(exc).__name__}: {exc}") from exc
+    except httpx.TransportError as exc:
+        raise TransientError(f"{type(exc).__name__}: {exc}") from exc
 
     usage = read_usage(resp)
 
-    if not getattr(resp, "choices", None):
-        raise UsageError("no choices in answer", usage)
+    if not resp.candidates:
+        raise UsageError(f"no candidates in answer: {resp.prompt_feedback}", usage)
 
-    choice = resp.choices[0]
-    reason = getattr(choice, "finish_reason", None)
-    if reason not in (None, "stop"):
+    reason = resp.candidates[0].finish_reason
+    if reason not in (None, genai_types.FinishReason.STOP):
         raise UsageError(f"finish_reason={reason} (output truncated or blocked)", usage)
 
-    text = getattr(choice.message, "content", "") or ""
+    text = resp.text or ""
     if not text.strip():
         raise UsageError("empty response body", usage)
     return text, usage
 
 
-def process_batch(path: Path, out_dir: Path, ring: KeyRing, base_url: str, model: str,
+def process_batch(path: Path, out_dir: Path, ring: KeyRing, model: str,
                   retries: int, overwrite: bool, timeout: int,
                   stall_retries: int) -> dict:
     name = path.stem
@@ -591,7 +540,7 @@ def process_batch(path: Path, out_dir: Path, ring: KeyRing, base_url: str, model
     while attempt < retries:
         if ring.spent:
             last_errs = last_errs or [
-                f"request budget on {', '.join(ring.names)} is spent — "
+                f"free-tier request budget on {', '.join(ring.names)} is spent — "
                 f"every key kept answering 429 with nothing getting through"]
             break
 
@@ -601,7 +550,8 @@ def process_batch(path: Path, out_dir: Path, ring: KeyRing, base_url: str, model
             if stalls > stall_retries:
                 last_errs = last_errs or [
                     f"every key ({', '.join(ring.names)}) is rate-limited after "
-                    f"{stall_retries} waits — the request budget is spent, "
+                    f"{stall_retries} waits — the free-tier request budget is "
+                    f"spent, "
                     f"try again later or on another key"]
                 break
             print(f"  [{name}] all keys rate-limited, waiting {min(wait, MAX_WAIT):.0f}s "
@@ -622,7 +572,7 @@ def process_batch(path: Path, out_dir: Path, ring: KeyRing, base_url: str, model
                 + payload
             )
         try:
-            raw, usage = call_llm(api_key, base_url, model, user_text, timeout)
+            raw, usage = call_llm(api_key, model, user_text, timeout)
             ring.note_ok()
             add_usage(spent, usage)
             out = parse_csv_text(raw)
@@ -691,14 +641,12 @@ def main() -> int:
     ap.add_argument("--out", dest="out_dir", default="",
                     help="default: <in>_fa, beside the input directory")
     ap.add_argument("--api-key", default="",
-                    help="one key; without it every key named in KEY_ENV_NAMES that is "
-                         "set in the environment is used, rotating when one runs out "
-                         "of quota")
-    ap.add_argument("--base-url", default=BASE_URL,
-                    help=f"OpenAI-compatible endpoint (default: {BASE_URL})")
+                    help="one key; without it every GEMINI_API_KEY* in the environment "
+                         "is used, rotating when one runs out of quota")
     ap.add_argument("--model", default=MODEL)
     ap.add_argument("--workers", type=int, default=3,
-                    help="parallel batches")
+                    help="parallel batches; the free tier's window is small enough that "
+                         "more of these mostly buys 429s and waits")
     ap.add_argument("--retries", type=int, default=4,
                     help="attempts at an answer the validator will accept")
     ap.add_argument("--stall-retries", type=int, default=12,
@@ -713,9 +661,9 @@ def main() -> int:
 
     keys = ([("--api-key", args.api_key)] if args.api_key else ENV_KEYS)
     if not keys:
-        keys = [("(no key)", "")]
-        print(f"note: no key given and none of {', '.join(KEY_ENV_NAMES)} is set — "
-              f"sending unauthenticated requests to {args.base_url}", file=sys.stderr)
+        print(f"error: pass --api-key or set at least one {KEY_ENV_PREFIX}* "
+              f"environment variable", file=sys.stderr)
+        return 2
     ring = KeyRing(keys)
 
     in_dir = Path(args.in_dir)
@@ -730,8 +678,7 @@ def main() -> int:
 
     todo = [f for f in files
             if args.overwrite or not (out_dir / f"{f.stem}_fa.xlsx").exists()]
-    print(f"model={args.model}  base_url={args.base_url}\n"
-          f"keys={', '.join(ring.names)}\n"
+    print(f"model={args.model}  keys={', '.join(ring.names)}\n"
           f"in={in_dir}  out={out_dir}\n"
           f"batches={len(files)} ({len(todo)} to translate, "
           f"{len(files) - len(todo)} already done)  workers={args.workers}  "
@@ -742,7 +689,7 @@ def main() -> int:
     results = []
     with cf.ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {
-            pool.submit(process_batch, f, out_dir, ring, args.base_url, args.model,
+            pool.submit(process_batch, f, out_dir, ring, args.model,
                         args.retries, args.overwrite, args.timeout,
                         args.stall_retries): f
             for f in files
@@ -782,7 +729,8 @@ def main() -> int:
     rate_limited = [r for r in failed if r.get("rate_limited")]
     if rate_limited:
         print(f"\n{len(rate_limited)} of the {len(failed)} failures never reached the "
-              f"model — the request budget on {', '.join(ring.names)} is spent."
+              f"model — the free-tier request budget on {', '.join(ring.names)} "
+              f"is spent."
               f"\nTranslated batches are kept, so re-running this later (or with "
               f"another key) picks up exactly where it stopped.")
     remaining = sum(1 for f in files
