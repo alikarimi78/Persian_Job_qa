@@ -36,7 +36,7 @@ KEY_ENV_PREFIX = "GEMINI_API_KEY"
 ENV_KEYS = [(name, os.environ[name]) for name in sorted(os.environ)
             if name.startswith(KEY_ENV_PREFIX) and os.environ[name]]
 
-MODEL = os.environ.get("TRANSLATE_MODEL", "gemini-3.8-flash")
+MODEL = os.environ.get("TRANSLATE_MODEL", "gemini-3.6-flash")
 
 MAX_OUTPUT_TOKENS = 65536
 
