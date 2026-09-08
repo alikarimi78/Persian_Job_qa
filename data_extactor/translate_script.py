@@ -36,7 +36,7 @@ KEY_ENV_PREFIX = "GEMINI_API_KEY"
 ENV_KEYS = [(name, os.environ[name]) for name in sorted(os.environ)
             if name.startswith(KEY_ENV_PREFIX) and os.environ[name]]
 
-MODEL = os.environ.get("TRANSLATE_MODEL", "gemini-3.6-flash")
+MODEL = os.environ.get("TRANSLATE_MODEL", "gemini-3.7-flash")
 
 MAX_OUTPUT_TOKENS = 65536
 
@@ -328,11 +328,10 @@ def validate(src: pd.DataFrame, out: pd.DataFrame, cols: list[str]) -> list[str]
                 if abs(exp - got) > ITEM_TOLERANCE or (exp and not got):
                     errs.append(f"{code} / {c}: expected {exp} items, got {got}")
             elif c in CAPPED_LIST_COLUMNS:
-                target = CAPPED_LIST_COLUMNS[c][0]
                 lo, hi = capped_bounds(c, exp)
                 if got > hi:
-                    errs.append(f"{code} / {c}: keep only the {target} most important "
-                                f"items, got {got}")
+                    errs.append(f"{code} / {c}: keep at most {hi} items — the input "
+                                f"has {exp} and nothing may be added, got {got}")
                 elif got < lo:
                     errs.append(f"{code} / {c}: too few items, got {got}, "
                                 f"expected at least {lo}")
@@ -568,7 +567,9 @@ def process_batch(path: Path, out_dir: Path, ring: KeyRing, model: str,
                   "every item of aliases, skills, knowledge, abilities and "
                   "career_path_next, and keep the Persian idiomatic and official. "
                   "For tools and work_context keep the 6-7 most important items, for "
-                  "responsibilities the 8-10 that define the job.\n\n"
+                  "responsibilities the 8-10 that define the job — these are ceilings, "
+                  "not quotas: when the input cell has fewer, keep only what is there "
+                  "and never add an item the input does not have.\n\n"
                 + payload
             )
         try:
