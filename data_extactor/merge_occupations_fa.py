@@ -20,7 +20,10 @@ OUT_COLUMNS = ["row_index", "job_code"] + COLUMNS + ["source"]
 
 PROSE_COLUMNS = ["job_title", "description"]
 
-CAP = {"skills": 7, "knowledge": 8, "abilities": 19, "work_context": 18}
+# the military rows are composed most-specific-first, so the cap drops the generic tail;
+# knowledge/abilities/career_path_next hold at most 7, the same bound the O*NET rows carry
+CAP = {"skills": 7, "knowledge": 7, "abilities": 7, "work_context": 18,
+       "career_path_next": 7}
 
 SOURCE_ONET = "O*NET — ترجمهٔ دوم (بازبینی‌شده)"
 SOURCE_MILITARY = "تولیدی — تکمیل مشاغل نظامی"

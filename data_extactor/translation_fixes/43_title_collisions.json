@@ -2,7 +2,11 @@
  "canonical": {
   "job_title": {
    "Nurse Midwives": "ماماهای پرستار (Nurse Midwives)",
-   "Midwives": "ماماها (Midwives)"
+   "Midwives": "ماماها (Midwives)",
+   "Physician Assistants": "دستیاران پزشک (Physician Assistants)",
+   "Medical Assistants": "کمک‌پزشکان و دستیاران مطب (Medical Assistants)",
+   "Model Makers, Wood": "مدل‌سازان چوب (Model Makers, Wood)",
+   "Patternmakers, Wood": "الگوسازان چوب (Patternmakers, Wood)"
   }
  }
 }

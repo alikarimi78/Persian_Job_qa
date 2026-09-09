@@ -142,7 +142,8 @@ def check(en: pd.DataFrame, fa: pd.DataFrame, en_names: list[str],
             variants[column] = {
                 "terms": len(split),
                 "of": len(votes),
-                "examples": [{"term": t, "forms": sorted(f, key=f.get, reverse=True)[:4]}
+                "examples": [{"term": t,
+                              "forms": sorted(split[t], key=split[t].get, reverse=True)[:4]}
                              for t in sorted(split, key=lambda k: -sum(split[k].values()))[:5]],
             }
     soft["term_variants"] = variants
