@@ -43,6 +43,7 @@ class SearchOut(BaseModel):
     scores: list[float] | None = None
     details: list[JobDetailOut] | None = None
     related_jobs: list[str] | None = None
+    nearest: JobDetailOut | None = None
     job_draft: dict[str, str] | None = None
 
 

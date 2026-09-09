@@ -25,7 +25,7 @@ from .intents import (EXPLICIT_COMBO_WORDS, INTENT_TO_FIELDS, detect_intent,
                       names_an_occupation)
 from .llm import LLMClient
 from .messages import (ABOUT_MESSAGE, DISCOVERY_NOT_REAL, DISCOVERY_UNAVAILABLE,
-                       GREETING_MESSAGE, MATCH_HEADER, OOD_MESSAGE, PROFILE_NONE)
+                       DISCOVERY_VAGUE, GREETING_MESSAGE, OOD_MESSAGE, PROFILE_NONE)
 from .prompts import (SYSTEM_ADAPTED, SYSTEM_INTERDISCIPLINARY, SYSTEM_ITEM_SELECT,
                       SYSTEM_JOB_MATCH, SYSTEM_JOB_RESOLVE, SYSTEM_PROFILE_ANALYZE,
                       SYSTEM_SINGLE)
@@ -44,6 +44,7 @@ except Exception:
     _OOM = ()
 
 NOT_A_JOB = object()
+TOO_VAGUE = object()
 
 log = logging.getLogger("job_qa_service")
 
@@ -177,11 +178,6 @@ class JobQAEngine:
         order = [i for i, _ in sorted(rrf.items(), key=lambda x: x[1], reverse=True)]
         return order, dense, sparse
 
-    # Which job the user means, decided by the LLM over the retrieved candidates: a
-    # corpus row index when one of them *is* that job, a composed record when none is,
-    # NOT_A_JOB when the request names no real occupation, None when the call failed.
-    # The composed record is a *merge* — the candidates are handed over whole as the
-    # material to build from, not as a writing sample to avoid repeating.
     def _resolve_job(self, question, candidate_idxs):
         records = "\n\n".join(
             f"رکورد {n}:\n{build_context(self.df.iloc[i], DISCOVERY_FIELDS)}"
@@ -200,6 +196,8 @@ class JobQAEngine:
         decision = str(obj.get("decision", "")).strip().lower()
         if decision == "not_a_job" or str(obj.get("not_a_job", "")).strip().lower() == "true":
             return NOT_A_JOB
+        if decision == "too_vague":
+            return TOO_VAGUE
         if decision == "match":
             try:
                 pick = int(obj.get("match_index"))
@@ -214,18 +212,16 @@ class JobQAEngine:
             return None
         return self.title_index.get(draft["job_title"], draft)
 
-    # The nearest corpus records, so the user can see what the search actually held.
-    # `answered` is dropped before the slice rather than after it, so the list is
-    # DISCOVERY_RELATED long either way and no record is printed beside itself.
     def _related_titles(self, order, answered=None):
         return [self.df.iloc[i]["job_title"] for i in order
                 if i != answered][:DISCOVERY_RELATED]
 
-    # Answers a job request, composing the record when the corpus does not hold it.
-    # `offline_match(dense, sparse)` is the rule applied when there is no reading to
-    # branch on — an outage, or use_llm=False. A *described* request needs the strict
-    # DISCOVERY_MATCH bar, since a spec answered from a 0.52 record is a wrong answer;
-    # a *typed name* gets the looser lexical rule the score gate here used to apply.
+    def _nearest_detail(self, order, fields, answered=None):
+        for i in order:
+            if i != answered:
+                return job_detail(self.df.iloc[i], fields)
+        return None
+
     def _discover(self, question, q_norm, use_llm=True, retrieved=None, offline_match=None):
         if retrieved is None:
             retrieved = self._retrieve(q_norm)
@@ -234,7 +230,8 @@ class JobQAEngine:
         s1_dense, s1_sparse = float(dense[i1]), float(sparse[i1])
         related = self._related_titles(order)
         refusal = {"mode": "out_of_domain", "intent": "job_request",
-                   "score": s1_dense, "related_jobs": related}
+                   "score": s1_dense, "related_jobs": related,
+                   "nearest": self._nearest_detail(order, DISCOVERY_PRIMARY)}
 
         if s1_dense < DISCOVERY_FLOOR and s1_sparse < THRESHOLD_SPARSE:
             return {"mode": "out_of_domain", "intent": "job_request",
@@ -245,6 +242,8 @@ class JobQAEngine:
 
         if resolved is NOT_A_JOB:
             return refusal | {"answer": DISCOVERY_NOT_REAL}
+        if resolved is TOO_VAGUE:
+            return refusal | {"mode": "needs_detail", "answer": DISCOVERY_VAGUE}
         offline_match = offline_match or (lambda dense_, sparse_: dense_ >= DISCOVERY_MATCH)
         if resolved is None and offline_match(s1_dense, s1_sparse):
             resolved = i1
@@ -260,21 +259,20 @@ class JobQAEngine:
                     f"خواسته کاربر: {question}"},
             ], question, [row], use_llm)
             if not ans:
-                ans = f"{MATCH_HEADER}\n\n{template_one(row, DISCOVERY_FIELDS)}"
+                ans = template_one(row, DISCOVERY_FIELDS)
             return {"mode": "job_match", "intent": "job_request",
                     "job": row["job_title"], "score": float(dense[resolved]),
                     "related_jobs": self._related_titles(order, resolved), "answer": ans,
+                    "nearest": self._nearest_detail(order, DISCOVERY_PRIMARY, resolved),
                     "details": [job_detail(row, DISCOVERY_PRIMARY, picks)]}
 
         return {"mode": "job_generated", "intent": "job_request",
                 "job": resolved["job_title"], "score": s1_dense,
                 "job_draft": resolved, "related_jobs": related,
+                "nearest": self._nearest_detail(order, DISCOVERY_PRIMARY),
                 "answer": render_draft(resolved),
                 "details": [job_detail(resolved, DISCOVERY_PRIMARY)]}
 
-    # The prose for a composed record, written from that record and not from the corpus
-    # row it grew out of: one source for the whole card, so the sentences above the boxes
-    # and the boxes themselves cannot disagree.
     def _adapted_answer(self, question, record, use_llm):
         if not use_llm:
             return ""
@@ -425,27 +423,28 @@ class JobQAEngine:
                     "details": [job_detail(row1, fields, picks1),
                                 job_detail(row2, fields, picks2)]}
 
-        # A question is resolved the way a request is, and for the same reason: retrieval
-        # ranks by topic, so its leader is the *nearest* job rather than the one asked
-        # about, and the two are answered differently. Where a candidate is the job, the
-        # stored record answers it; where none is, the record composed for the user's own
-        # job does — its columns, not a neighbour's, are what the boxes then show.
         resolved = (self._resolve_job(question, order[:DISCOVERY_CANDIDATES])
                     if use_llm else None)
 
         if resolved is NOT_A_JOB:
             return {"mode": "out_of_domain", "intent": intent, "score": s1_dense,
-                    "related_jobs": self._related_titles(order), "answer": OOD_MESSAGE}
+                    "related_jobs": self._related_titles(order),
+                    "nearest": self._nearest_detail(order, fields), "answer": OOD_MESSAGE}
+
+        if resolved is TOO_VAGUE:
+            return {"mode": "needs_detail", "intent": intent, "score": s1_dense,
+                    "related_jobs": self._related_titles(order),
+                    "nearest": self._nearest_detail(order, fields),
+                    "answer": DISCOVERY_VAGUE}
 
         if isinstance(resolved, dict):
             ans = self._adapted_answer(question, resolved, use_llm)
             if not ans:
                 ans = template_one(resolved, fields)
-            # Every neighbour is kept: none of them is the answer, and they are how the
-            # user checks that the corpus really does lack the job just described to them.
             return {"mode": "job_adapted", "intent": intent,
                     "job": resolved["job_title"], "score": s1_dense, "answer": ans,
                     "related_jobs": self._related_titles(order),
+                    "nearest": self._nearest_detail(order, fields),
                     "details": [job_detail(resolved, fields)]}
 
         if isinstance(resolved, int):
@@ -462,4 +461,5 @@ class JobQAEngine:
         return {"mode": "single", "intent": intent, "job": row1["job_title"],
                 "score": s1_dense, "answer": ans,
                 "related_jobs": self._related_titles(order, i1),
+                "nearest": self._nearest_detail(order, fields, i1),
                 "details": [job_detail(row1, fields, picks)]}

@@ -6,7 +6,7 @@ EMB_CACHE_DIR = os.getenv("EMB_CACHE_DIR", "emb_cache")
 EMB_BATCH_SIZE = int(os.getenv("EMB_BATCH_SIZE", "4"))
 EMB_MAX_SEQ_LEN = int(os.getenv("EMB_MAX_SEQ_LEN", "2048"))
 
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5.6-luna")
 LLM_BASE_URL = os.getenv("OPENAI_BASE_URL")
 LLM_API_KEY = os.getenv("OPENAI_API_KEY")
 OCCUPATIONS_PATH = os.getenv("OCCUPATIONS_PATH")
@@ -24,8 +24,8 @@ SECONDARY_MARGIN = 0.01
 PAIR_SIM_MAX     = 0.85
 
 DISCOVERY_FLOOR      = 0.35
-DISCOVERY_CANDIDATES = 3
-DISCOVERY_RELATED    = 3
+DISCOVERY_CANDIDATES = 1
+DISCOVERY_RELATED    = 1
 DISCOVERY_MATCH      = 0.60
 
 # The bar a *typed job name* answers from its leader on when the model cannot be read
