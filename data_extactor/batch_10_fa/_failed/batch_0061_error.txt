@@ -1,1 +1,0 @@
-gave up after 13 rate-limit/network failures, last: 429 out of quota (generate_content_free_tier_requests limit 20), server asks for 59s

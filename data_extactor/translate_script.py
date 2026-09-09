@@ -285,12 +285,15 @@ def parse_csv_text(text: str) -> pd.DataFrame:
                        keep_default_na=False)
 
 
+# How many items a capped column may keep for a source cell of `expected` items.
+# The ceiling carries ITEM_TOLERANCE, like the strict columns: a cell one item
+# over the cap is a split phrase, not an invention, and rejecting the whole batch
+# over it costs a retry (and a request off the daily quota) for nothing.
 def capped_bounds(column: str, expected: int) -> tuple[int, int]:
-    """How many items a capped column may keep for a source cell of `expected` items."""
     if expected <= 0:
         return 0, 0
     _, lo, hi = CAPPED_LIST_COLUMNS[column]
-    return min(expected, lo), min(expected, hi)
+    return min(expected, lo), min(expected, hi) + ITEM_TOLERANCE
 
 
 def validate(src: pd.DataFrame, out: pd.DataFrame, cols: list[str]) -> list[str]:
@@ -329,9 +332,11 @@ def validate(src: pd.DataFrame, out: pd.DataFrame, cols: list[str]) -> list[str]
                     errs.append(f"{code} / {c}: expected {exp} items, got {got}")
             elif c in CAPPED_LIST_COLUMNS:
                 lo, hi = capped_bounds(c, exp)
+                # the retry prompt gets the strict target, not the tolerated ceiling
                 if got > hi:
-                    errs.append(f"{code} / {c}: keep at most {hi} items — the input "
-                                f"has {exp} and nothing may be added, got {got}")
+                    errs.append(f"{code} / {c}: keep at most {hi - ITEM_TOLERANCE} "
+                                f"items — the input has {exp} and nothing may be "
+                                f"added, got {got}")
                 elif got < lo:
                     errs.append(f"{code} / {c}: too few items, got {got}, "
                                 f"expected at least {lo}")

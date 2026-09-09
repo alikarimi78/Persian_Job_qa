@@ -1,3 +1,0 @@
-47-2151.00 / tools: keep only the 6-7 most important items, got 6
-47-2171.00 / tools: keep only the 6-7 most important items, got 6
-47-2171.00 / responsibilities: keep only the 8-10 most important items, got 8

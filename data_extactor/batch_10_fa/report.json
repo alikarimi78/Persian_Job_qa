@@ -601,16 +601,13 @@
   },
   {
     "batch": "batch_0061",
-    "status": "failed",
-    "errors": [
-      "gave up after 13 rate-limit/network failures, last: 429 out of quota (generate_content_free_tier_requests limit 20), server asks for 59s"
-    ],
+    "status": "skipped",
+    "reason": "already exists",
     "spent": {
       "in": 0,
       "out": 0,
       "think": 0
-    },
-    "rate_limited": true
+    }
   },
   {
     "batch": "batch_0062",
@@ -724,18 +721,13 @@
   },
   {
     "batch": "batch_0073",
-    "status": "failed",
-    "errors": [
-      "47-2072.00 / responsibilities: keep at most 5 items — the input has 5 and nothing may be added, got 8",
-      "47-2081.00 / tools: keep at most 9 items — the input has 11 and nothing may be added, got 11",
-      "47-2111.00 / tools: keep at most 9 items — the input has 30 and nothing may be added, got 30"
-    ],
+    "status": "skipped",
+    "reason": "already exists",
     "spent": {
-      "in": 12884,
-      "out": 11043,
+      "in": 0,
+      "out": 0,
       "think": 0
-    },
-    "rate_limited": false
+    }
   },
   {
     "batch": "batch_0074",
@@ -759,12 +751,11 @@
   },
   {
     "batch": "batch_0076",
-    "status": "ok",
-    "rows": 10,
-    "attempts": 2,
+    "status": "skipped",
+    "reason": "already exists",
     "spent": {
-      "in": 24995,
-      "out": 21262,
+      "in": 0,
+      "out": 0,
       "think": 0
     }
   },
@@ -830,17 +821,13 @@
   },
   {
     "batch": "batch_0083",
-    "status": "failed",
-    "errors": [
-      "job_code missing from output: ['49-9095.00', '49-9096.00', '49-9097.00', '49-9098.00', '49-9099.00', '49-9099.01', '51-1011.00', '51-2011.00', '51-2021.00', '51-2022.00']",
-      "job_code not in input: ['نصاب ساختمان\\u200cهای پیش\\u200cساخته و خانه\\u200cهای سیار (Manufactured Building and Mobile Home Installers)', 'ریگرها و مونتاژکاران تجهیزات باربرداری (Riggers)', 'تعمیرکاران علائم، سیگنال\\u200cها و سوزن\\u200cهای خطوط راه\\u200cآهن (Signal and Track Switch Repairers)', 'کمک\\u200cکارگران و کارگران کمکی نصب، نگهداری و تعمیرات (Helpers--Installation, Maintenance, and Repair Workers)', 'سایر کارگران و تکنسین\\u200cهای نصب، نگهداری و تعمیرات (Installation, Maintenance, and Repair Workers, All Other)', 'تکنسین\\u200cهای انرژی زمین\\u200cگرمایی (Geothermal Technicians)', 'سرپرستان رده\\u200cاول کارگران تولید و عملیات (First-Line Supervisors of Production and Operating Workers)', 'مونتاژکاران سازه، سطوح، مهارها و سیستم\\u200cهای هواپیما (Aircraft Structure, Surfaces, Rigging, and Systems Assemblers)', 'سیم\\u200cپیچ\\u200cها، عایق\\u200cکاران و پرداخت\\u200cکاران بوبین و سیم\\u200cپیچ (Coil Winders, Tapers, and Finishers)', 'مونتاژکاران تجهیزات الکتریکی و الکترونیکی (Electrical and Electronic Equipment Assemblers)']"
-    ],
+    "status": "skipped",
+    "reason": "already exists",
     "spent": {
-      "in": 24991,
-      "out": 22250,
+      "in": 0,
+      "out": 0,
       "think": 0
-    },
-    "rate_limited": false
+    }
   },
   {
     "batch": "batch_0084",
@@ -954,16 +941,13 @@
   },
   {
     "batch": "batch_0095",
-    "status": "failed",
-    "errors": [
-      "RuntimeError: 403 <!DOCTYPE html> <html lang=en> <meta charset=utf-8> <meta name=viewport content=\"initial-scale=1, minimum-scale=1, width=device-width\"> <title>Error 403 (Forbidden)!!1</title> <style> *{margin:0;padding:0}html,code{font:15px/22px arial,sans-serif}html{background:#fff;color:#222;padding:15px}body{margin:7% auto 0;max-width:390px;min-height:180px;padding:30px 0 15px}* > body{background:url(//www.goo…"
-    ],
+    "status": "skipped",
+    "reason": "already exists",
     "spent": {
-      "in": 12560,
-      "out": 10255,
+      "in": 0,
+      "out": 0,
       "think": 0
-    },
-    "rate_limited": false
+    }
   },
   {
     "batch": "batch_0096",
@@ -997,16 +981,13 @@
   },
   {
     "batch": "batch_0099",
-    "status": "failed",
-    "errors": [
-      "ParserError: Error tokenizing data. C error: Expected 11 fields in line 3, saw 21\n"
-    ],
+    "status": "skipped",
+    "reason": "already exists",
     "spent": {
-      "in": 10837,
-      "out": 10133,
+      "in": 0,
+      "out": 0,
       "think": 0
-    },
-    "rate_limited": false
+    }
   },
   {
     "batch": "batch_0100",

@@ -1,1 +1,0 @@
-free-tier request budget on GEMINI_API_KEY2 is spent — every key kept answering 429 with nothing getting through
