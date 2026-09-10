@@ -50,11 +50,46 @@ _JOB_REQUEST_RE = [re.compile(p) for p in (
 )]
 
 
+_WORD_START = "(?<![ءآ-یa-zA-Z\u200c])"
+
+INTENT_PATTERNS = {intent: [re.compile(_WORD_START + re.escape(k)) for k in kws]
+                   for intent, kws in INTENT_KEYWORDS.items()}
+
+
+def _first_intent(question, before=None):
+    for intent, patterns in INTENT_PATTERNS.items():
+        for pattern in patterns:
+            hit = pattern.search(question)
+            if hit and (before is None or hit.start() < before):
+                return intent
+    return None
+
+
+def _last_intent(question):
+    best, where = None, -1
+    for intent, patterns in INTENT_PATTERNS.items():
+        for pattern in patterns:
+            hit = pattern.search(question)
+            if hit and hit.start() > where:
+                best, where = intent, hit.start()
+    return best
+
+
+_ASKING_WORDS = QUESTION_WORDS | {"چه", "چرا", "چقدر"}
+
+
+def _is_asking(question):
+    return ("؟" in question or "?" in question
+            or bool(set(_tokens(question)) & _ASKING_WORDS))
+
+
 def detect_intent(question):
-    for intent, kws in INTENT_KEYWORDS.items():
-        if any(k in question for k in kws):
-            return intent
-    return "general"
+    named = _occupation_offset(question)
+    if named is not None:
+        return (_first_intent(question, before=named)
+                or (_last_intent(question) if _is_asking(question) else None)
+                or "general")
+    return _first_intent(question) or "general"
 
 
 def is_job_request(question):
@@ -80,13 +115,14 @@ OCCUPATION_HEADS = (
 _AGENTIVE_STEM_MIN = 3
 _AGENTIVE_SUFFIXES = ("گر", "بان", "کار", "چی", "دار", "شناس", "ساز", "نویس", "فروش",
                       "نگار", "پزشک", "ورز", "باف", "کش", "کننده", "دهنده", "دان",
-                      "یست", "گذار", "گزار", "پرور")
+                      "یست", "گذار", "گزار", "پرور", "ریز")
 
 _PLURALS = (("گان", "ه"), ("های", ""), ("ها", ""), ("ان", ""))
 
 _NOT_OCCUPATIONS = frozenset((
     "خیابان", "بیابان", "سازمان", "آشکار", "افکار", "انکار", "نمودار", "پدیدار",
     "بدهکار", "طلبکار", "پیشکش", "سرکش", "قارچی", "تماشاچی", "شکار", "نگار", "خاندان",
+    "مسئولیت", "مسولیت",
 ))
 
 _PUNCT = "؟?.،,:;!\"'«»()[]"
@@ -121,17 +157,28 @@ def _is_agentive(word):
                for s in _AGENTIVE_SUFFIXES)
 
 
-def names_an_occupation(question):
-    for token in _tokens(question):
+_NON_SPACE = re.compile(r"\S+")
+
+
+def _occupation_offset(question):
+    for found in _NON_SPACE.finditer(question):
+        token = found.group().strip(_PUNCT)
+        forms = _forms(token.replace("\u200c", "")) if token else ()
+        if not token or any(word in _NOT_OCCUPATIONS for word in forms):
+            continue
         if any(token.startswith(head) for head in OCCUPATION_HEADS):
-            return True
-        for word in _forms(token.replace("\u200c", "")):
+            return found.start()
+        for word in forms:
             # The activity noun of an agentive stem names the same work the stem does:
             # «لوله‌کشی» is «لوله‌کش» + ی, «برنامه‌نویسی» is «برنامه‌نویس» + ی. Without this
             # the whole family — کشی، نویسی، گری، سازی، شناسی — read as not-an-occupation.
             if _is_agentive(word) or (word.endswith("ی") and _is_agentive(word[:-1])):
-                return True
-    return False
+                return found.start()
+    return None
+
+
+def names_an_occupation(question):
+    return _occupation_offset(question) is not None
 
 
 BARE_SYSTEM_MAX_TOKENS = 8
