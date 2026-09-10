@@ -21,8 +21,7 @@ from .config import (ADAPTED_MAX_TOKENS, DISCOVERY_CANDIDATES, DISCOVERY_FLOOR,
                      THRESHOLD_SPARSE, W_FULL, W_TITLE)
 from .emb_store import store
 from .intents import (EXPLICIT_COMBO_WORDS, INTENT_TO_FIELDS, detect_intent,
-                      is_about_system, is_bare_name, is_greeting, is_job_request,
-                      names_an_occupation)
+                      is_about_system, is_bare_name, is_greeting, is_job_request)
 from .llm import LLMClient
 from .messages import (ABOUT_MESSAGE, DISCOVERY_NOT_REAL, DISCOVERY_UNAVAILABLE,
                        DISCOVERY_VAGUE, GREETING_MESSAGE, OOD_MESSAGE, PROFILE_NONE)
@@ -383,7 +382,15 @@ class JobQAEngine:
         i1 = order[0]
         s1_dense, s1_sparse = float(dense[i1]), float(sparse[i1])
 
-        if bare_name and names_an_occupation(q):
+        # Every bare name goes to `_discover`, whether or not `names_an_occupation` can see
+        # an occupation in it. That test misses 17% of the corpus's own aliases — «رمال»,
+        # «فالگیر», «بقال», «مورخ» carry no agent-noun head and no agentive suffix it knows —
+        # and a miss did not merely skip the composing path, it dropped the input onto the
+        # question path's stricter gate, where «رمال» (dense 0.41) was refused outright with
+        # no call made at all. `_discover` re-checks `DISCOVERY_FLOOR` itself, so nothing
+        # below the floor costs a call either way, and above it the prompt's `not_a_job`
+        # branch is the realism check — a better one than any suffix list.
+        if bare_name:
             return self._discover(
                 question, q, use_llm, (order, dense, sparse),
                 offline_match=lambda dense_, sparse_: (dense_ >= THRESHOLD_MATCH
