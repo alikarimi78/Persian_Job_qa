@@ -12,11 +12,11 @@ from . import profile as profile_match
 from .bm25 import BM25
 from .columns import (DISCOVERY_FIELDS, DISCOVERY_PRIMARY, EXPECTED_COLUMNS,
                       FIELD_LABELS, PROSE_COLUMNS, RANKED_FIELDS)
-from .config import (ADAPTED_MAX_TOKENS, DISCOVERY_CANDIDATES, DISCOVERY_FLOOR,
-                     DISCOVERY_MATCH, DISCOVERY_RELATED, EMB_BATCH_SIZE, EMB_MAX_SEQ_LEN,
-                     EMBED_MODEL_NAME, MAX_CANDIDATES, NAMED_JOB_SPARSE, PAIR_SIM_MAX,
-                     PREVIEW_ITEMS, PROFILE_DENSE_ONLY, PROFILE_TOP_N, PROFILE_W_COVER,
-                     PROFILE_W_DENSE, RESOLVE_MAX_TOKENS, RRF_K, SCAN_DEPTH,
+from .config import (ADAPTED_MAX_TOKENS, DISCOVERY_CANDIDATES, DISCOVERY_FLOOR, DISCOVERY_MATCH,
+                     DISCOVERY_RELATED, DRAFT_MAX_ITEMS, EMB_BATCH_SIZE, EMB_MAX_SEQ_LEN,
+                     EMBED_MODEL_NAME, MAX_CANDIDATES, NAMED_JOB_SPARSE, PAIR_COVER_MARGIN,
+                     PAIR_SIM_MAX, PREVIEW_ITEMS, PROFILE_DENSE_ONLY, PROFILE_TOP_N,
+                     PROFILE_W_COVER, PROFILE_W_DENSE, RESOLVE_MAX_TOKENS, RRF_K, SCAN_DEPTH,
                      SECONDARY_MARGIN, SECONDARY_MIN, SELECT_MAX_TOKENS, THRESHOLD_MATCH,
                      THRESHOLD_SPARSE, W_FULL, W_TITLE)
 from .emb_store import store
@@ -207,6 +207,8 @@ class JobQAEngine:
         draft = {c: normalize_text(obj.get(c, "")) for c in EXPECTED_COLUMNS}
         for col in PROSE_COLUMNS:
             draft[col] = re.sub(r"\s*\|\s*", "، ", draft[col]).strip("، ")
+        for col, cap in DRAFT_MAX_ITEMS.items():
+            draft[col] = " | ".join([i.strip() for i in draft[col].split("|") if i.strip()][:cap])
         if not draft["job_title"]:
             return None
         return self.title_index.get(draft["job_title"], draft)
@@ -220,6 +222,64 @@ class JobQAEngine:
             if i != answered:
                 return job_detail(self.df.iloc[i], fields)
         return None
+
+    # A question that combines two fields names both, so each half is retrieved on its own.
+    # Retrieving only the whole question let the field that dominated it fill both slots:
+    # «مهندس کامپیوتر و پزشک» came back as two computer records and an answer admitting the
+    # medical half was missing. But the whole-question pair is sometimes the better one —
+    # «معلم و روان‌شناس» finds «روان‌شناسان مدارس», the intersection itself, which neither
+    # half finds alone — so it is kept for every half it already covers, to within
+    # PAIR_COVER_MARGIN of that half's own best record, and only a missed half is replaced.
+    # None when the question does not split into two halves leading to two different,
+    # unrelated records: «… مخلوط‌کن و ترکیب مواد» splits, but both halves find the same job.
+    def _combination_pair(self, q_norm, i1, i2):
+        tokens = q_norm.split()
+        at = next((n for n, tok in enumerate(tokens[1:-1], 1) if tok in ("و", "با")), None)
+        if at is None:
+            return None
+        halves = []
+        for half in (" ".join(tokens[:at]), " ".join(tokens[at + 1:])):
+            order, dense, _ = self._retrieve(half)
+            lead = prefer_dense_leader(order, dense)[0]
+            if float(dense[lead]) < THRESHOLD_MATCH - 0.05:
+                return None
+            halves.append((lead, dense))
+        (ia, da), (ib, db) = halves
+        if not self._unrelated(ia, ib):
+            return None
+        if i2 is not None:
+            ka = max((i1, i2), key=lambda i: float(da[i]))
+            kb = max((i1, i2), key=lambda i: float(db[i]))
+            a_held = float(da[ka]) >= float(da[ia]) - PAIR_COVER_MARGIN
+            b_held = float(db[kb]) >= float(db[ib]) - PAIR_COVER_MARGIN
+            if a_held and b_held:
+                ia, ib = (ka, kb) if ka != kb else (ka, i2 if ka == i1 else i1)
+            elif a_held and self._unrelated(ka, ib):
+                ia = ka
+            elif b_held and self._unrelated(ia, kb):
+                ib = kb
+        return ia, float(da[ia]), ib, float(db[ib])
+
+    def _unrelated(self, a, b):
+        return a != b and float(self.emb_full[a] @ self.emb_full[b]) < PAIR_SIM_MAX
+
+    # One card for two records: the prose combines them, and each keeps its own boxes.
+    def _combined(self, question, intent, fields, pair, use_llm):
+        ia, s_a, ib, s_b = pair
+        row1, row2 = self.df.iloc[ia], self.df.iloc[ib]
+        ans, (picks1, picks2) = self._answer_and_select([
+            {"role": "system", "content": SYSTEM_INTERDISCIPLINARY},
+            {"role": "user", "content":
+                f"شغل اول:\n{build_context(row1, fields)}\n\n"
+                f"شغل دوم:\n{build_context(row2, fields)}\n\nسوال کاربر: {question}"},
+        ], question, [row1, row2], use_llm)
+        if not ans:
+            ans = template_two(row1, row2, fields)
+        return {"mode": "interdisciplinary", "intent": intent,
+                "jobs": [row1["job_title"], row2["job_title"]],
+                "scores": [s_a, s_b], "answer": ans,
+                "details": [job_detail(row1, fields, picks1),
+                            job_detail(row2, fields, picks2)]}
 
     def _discover(self, question, q_norm, use_llm=True, retrieved=None, offline_match=None):
         if retrieved is None:
@@ -402,33 +462,15 @@ class JobQAEngine:
 
         i2 = next((c for c in order[1:SCAN_DEPTH + 1]
                    if float(self.emb_full[i1] @ self.emb_full[c]) < PAIR_SIM_MAX), None)
+        s2_dense = float(dense[i2]) if i2 is not None else None
 
-        explicit = any(k in q for k in EXPLICIT_COMBO_WORDS)
-        interdisciplinary, s2_dense = False, None
-        if i2 is not None:
-            s2_dense = float(dense[i2])
-            interdisciplinary = (
-                (not bare_name and s2_dense >= SECONDARY_MIN
-                 and abs(s1_dense - s2_dense) <= SECONDARY_MARGIN)
-                or (explicit and s2_dense >= THRESHOLD_MATCH - 0.05)
-            )
-
-        if interdisciplinary:
-            row1 = self.df.iloc[i1]
-            row2 = self.df.iloc[i2]
-            ans, (picks1, picks2) = self._answer_and_select([
-                {"role": "system", "content": SYSTEM_INTERDISCIPLINARY},
-                {"role": "user", "content":
-                    f"شغل اول:\n{build_context(row1, fields)}\n\n"
-                    f"شغل دوم:\n{build_context(row2, fields)}\n\nسوال کاربر: {question}"},
-            ], question, [row1, row2], use_llm)
-            if not ans:
-                ans = template_two(row1, row2, fields)
-            return {"mode": "interdisciplinary", "intent": intent,
-                    "jobs": [row1["job_title"], row2["job_title"]],
-                    "scores": [s1_dense, s2_dense], "answer": ans,
-                    "details": [job_detail(row1, fields, picks1),
-                                job_detail(row2, fields, picks2)]}
+        # An explicit combination is answered from a record for each half, and only when the
+        # question really does name two fields — otherwise the combining word is just a
+        # word, as in «داروهای ترکیبی» or «خدمات مشترکین», and the question is a normal one.
+        if any(k in q for k in EXPLICIT_COMBO_WORDS):
+            pair = self._combination_pair(q, i1, i2)
+            if pair:
+                return self._combined(question, intent, fields, pair, use_llm)
 
         resolved = (self._resolve_job(question, order[:DISCOVERY_CANDIDATES])
                     if use_llm else None)
@@ -453,6 +495,18 @@ class JobQAEngine:
                     "related_jobs": self._related_titles(order),
                     "nearest": self._nearest_detail(order, fields),
                     "details": [job_detail(resolved, fields)]}
+
+        # Two records within SECONDARY_MARGIN of each other used to be answered as a
+        # combination *before* the resolve step, which is where a job named in one breath
+        # went: «وظایف پرستار اورژانس هوایی چیست؟» came back as «پرستاران» plus the paramedics,
+        # the aviation half missing, while the same title typed bare composed a record that
+        # covered both. One job named is one job, so the tie is now only the fallback for
+        # when there is no reading to go on — an outage, or use_llm=False, whose routing and
+        # therefore `eval_engine` it leaves exactly as it was.
+        if (resolved is None and i2 is not None and s2_dense >= SECONDARY_MIN
+                and abs(s1_dense - s2_dense) <= SECONDARY_MARGIN):
+            return self._combined(question, intent, fields, (i1, s1_dense, i2, s2_dense),
+                                  use_llm)
 
         if isinstance(resolved, int):
             i1, s1_dense = resolved, float(dense[resolved])

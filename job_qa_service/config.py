@@ -22,6 +22,12 @@ THRESHOLD_SPARSE = 0.30
 SECONDARY_MIN    = 0.50
 SECONDARY_MARGIN = 0.01
 PAIR_SIM_MAX     = 0.85
+# How far below a half's own best record the whole-question pair may score and still count
+# as covering that half (engine._combination_pair). Calibrated on six combination questions:
+# halves the pair really covered sat 0.000-0.044 below the best, halves it had missed
+# 0.073-0.166 below, and the one in between — 0.066, a biomedical engineer standing for
+# «پزشکی» — reads as covered.
+PAIR_COVER_MARGIN = 0.07
 
 DISCOVERY_FLOOR      = 0.35
 DISCOVERY_CANDIDATES = 1
@@ -41,6 +47,12 @@ SELECT_MAX_TOKENS = 300
 # it is several times the size of the "match" reply the same call makes on the other
 # branch; truncated JSON parses as nothing and costs the whole generation.
 RESOLVE_MAX_TOKENS = 1500
+# The upper bound of each list column in SYSTEM_JOB_RESOLVE rule 5, enforced on the draft
+# rather than trusted to the prompt: the model does run over — ten responsibilities against
+# a stated nine — and once approved, a record holding more items can only score higher in
+# profile.coverage. Rule 8 orders every column most-important-first, so the cap drops the tail.
+DRAFT_MAX_ITEMS = {"aliases": 4, "tools": 8, "skills": 8, "knowledge": 7, "abilities": 7,
+                   "responsibilities": 9, "work_context": 7, "career_path_next": 4}
 ADAPTED_MAX_TOKENS = 700
 
 PROFILE_TOP_N        = 5

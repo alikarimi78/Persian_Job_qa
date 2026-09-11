@@ -20,7 +20,8 @@ INTENT_KEYWORDS = {
     "description":      ["معرفی", "شرح", "چیست", "توضیح", "درباره", "چیه"],
 }
 
-EXPLICIT_COMBO_WORDS = ["بین رشته", "بین‌رشته", "ترکیب", "هر دو", "هردو", "تلفیق", "میان‌رشته"]
+EXPLICIT_COMBO_WORDS = ["بین رشته", "بین‌رشته", "ترکیب", "هر دو", "هردو", "تلفیق", "میان‌رشته",
+                        "مشترک"]
 QUESTION_WORDS = {"چیست", "چیه", "چطور", "چگونه", "کدام", "چند", "چی", "کجا", "آیا"}
 
 JOB_REQUEST_KEYWORDS = [
@@ -98,7 +99,10 @@ def is_job_request(question):
     return any(p.search(question) for p in _JOB_REQUEST_RE)
 
 
-BARE_NAME_MAX_TOKENS = 4
+# Six, not four: 628 of the 1120 stored titles run past four words, and a job name typed in
+# full — «تکنسین ایستگاه شارژ خودروی برقی» — was read as a question, composed but never
+# offered as a suggestion. Up to six words covers 97% of the corpus's 10,274 aliases.
+BARE_NAME_MAX_TOKENS = 6
 
 OCCUPATION_HEADS = (
     "مدیر", "سرپرست", "رئیس", "معاون", "مسئول", "متصدی", "کارشناس", "کارمند", "کارگر",
