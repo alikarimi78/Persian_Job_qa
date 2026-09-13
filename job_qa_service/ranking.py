@@ -33,12 +33,18 @@ def _words(text):
     return [w for w in _WORD_SPLIT.split(text) if w]
 
 
-def prefer_contained_title(q_norm, order, titles):
+# The only one of the three corrections that reads the whole corpus rather than the
+# candidates, so it is also the only one that has to be told what this caller may reach:
+# without the mask it would promote a record another organization owns, which is exactly
+# the record the retrieval had just kept out.
+def prefer_contained_title(q_norm, order, titles, mask=None):
     q_words = _words(q_norm)
     if not q_words:
         return order
     best = None
     for idx, title in enumerate(titles):
+        if mask is not None and not mask[idx]:
+            continue
         t_words = _words(title)
         n = len(t_words)
         if n < 2 or n > len(q_words):

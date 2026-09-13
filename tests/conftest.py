@@ -53,6 +53,7 @@ from src.security import create_token, hash_password
 from src.routers import accounts as accounts_router
 from src.routers import admin as admin_router
 from src.routers import auth as auth_router
+from src.routers import jobs as jobs_router
 from src.routers import orgs as orgs_router
 from src.routers import reports as reports_router
 from src.routers import stats as stats_router
@@ -123,6 +124,7 @@ def app(db) -> FastAPI:
     api.include_router(stats_router.router)
     api.include_router(reports_router.router)
     api.include_router(admin_router.router)
+    api.include_router(jobs_router.router)
     return api
 
 

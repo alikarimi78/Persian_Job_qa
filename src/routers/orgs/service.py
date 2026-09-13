@@ -5,7 +5,7 @@ import re
 from fastapi import HTTPException, status
 from prisma import Base64, Prisma
 
-from src.models import OrganizationSummary
+from src.models import JobStatus, OrganizationSummary
 
 MAX_LOGO_BYTES = 512 * 1024
 
@@ -70,3 +70,21 @@ def get_organization(db: Prisma, organization_id: int) -> OrganizationSummary:
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Organization not found")
     return org
+
+
+# One grouped query for a whole list rather than a count per row. Records that belong
+# to no organization are the public corpus and are nobody's row here.
+def job_counts(db: Prisma, organization_ids: list[int],
+               status: JobStatus | None = None) -> dict[int, int]:
+    if not organization_ids:
+        return {}
+    where: dict = {"organization_id": {"in": organization_ids}}
+    if status is not None:
+        where["status"] = status
+    rows = db.jobrecord.group_by(by=["organization_id"], count=True, where=where)
+    return {row["organization_id"]: row["_count"]["_all"] for row in rows}
+
+
+def with_job_counts(db: Prisma, orgs: list[OrganizationSummary]) -> list[dict]:
+    counts = job_counts(db, [org.id for org in orgs])
+    return [{**org.model_dump(), "job_count": counts.get(org.id, 0)} for org in orgs]

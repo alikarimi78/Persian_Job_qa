@@ -7,6 +7,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class JobIn(BaseModel):
+    # Not one of the ten: who the record belongs to. None is the public corpus, which
+    # every organization searches; an id confines it to that organization's accounts.
+    # Absent means public, so a client that predates the column can only ever add to the
+    # shared corpus — never silently hand a record to an organization.
+    organization_id: int | None = None
+
     job_title: str = Field(min_length=2, max_length=255)
     aliases: str = Field(min_length=1)
     tools: str = Field(min_length=1)

@@ -10,13 +10,16 @@ from src.rate_limit import search_limiter
 class FakeEngine:
     def __init__(self):
         self.profiles = []
+        self.scopes = []
 
-    def answer(self, question):
+    def answer(self, question, scope=None):
+        self.scopes.append(scope)
         return {"mode": "single", "intent": "description", "answer": "پاسخ آزمایشی",
                 "job": "افسران توپخانه و موشک", "score": 0.9}
 
-    def analyze(self, profile):
+    def analyze(self, profile, scope=None):
         self.profiles.append(profile)
+        self.scopes.append(scope)
         return {
             "mode": "profile_match", "intent": "profile",
             "answer": "تحلیل آزمایشی",
@@ -147,3 +150,39 @@ def test_no_engine_is_503_not_500(world, client, monkeypatch):
     from src.engine_manager import manager
     monkeypatch.setattr(manager, "_engine", None)
     assert ask(client, world.user_a1, VALID).status_code == 503
+
+
+# ── the caller's own reach ────────────────────────────────────────────────────
+# The engine holds every organization's records in one corpus and is handed the set of
+# organizations this caller may search: None is "all of them", and the set's own None is
+# the public corpus everybody reads.
+
+def search(client, user, question="وظایف افسر توپخانه چیست؟"):
+    return client.post("/search", json={"question": question},
+                       headers={"Authorization": f"Bearer {create_token(user)}"})
+
+
+@pytest.mark.parametrize("account", ["user_a1", "admin_a"])
+def test_a_search_reaches_the_public_corpus_and_the_callers_own(world, engine, client,
+                                                                account):
+    user = getattr(world, account)
+    assert search(client, user).status_code == 200
+    assert engine.scopes[-1] == {None, world.org_a.id}
+
+
+def test_a_super_admin_searches_every_record(world, engine, client):
+    assert search(client, world.root).status_code == 200
+    assert engine.scopes[-1] is None
+
+
+def test_an_account_without_an_organization_reaches_the_public_corpus_alone(world, engine,
+                                                                           client, db):
+    loose = db.user.create(data={"username": "loose", "hashed_password": "x",
+                                 "role": "user"})
+    assert search(client, loose).status_code == 200
+    assert engine.scopes[-1] == {None}
+
+
+def test_the_profile_path_is_scoped_the_same_way(world, engine, client):
+    ask(client, world.user_b1, VALID)
+    assert engine.scopes[-1] == {None, world.org_b.id}

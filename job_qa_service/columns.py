@@ -3,6 +3,12 @@ EXPECTED_COLUMNS = ["job_title", "aliases", "tools", "skills", "knowledge", "abi
 
 PROSE_COLUMNS = ["job_title", "description"]
 
+# Not one of the ten, and never part of a record's text: which organization's corpus the
+# record sits in. The DataFrame column is an integer, so the database's NULL — the public
+# corpus every organization searches — arrives here as 0.
+ORGANIZATION_COLUMN = "organization_id"
+PUBLIC_ORGANIZATION = 0
+
 FIELD_LABELS = {
     "job_title": "عنوان شغل", "aliases": "نام‌های دیگر", "tools": "ابزارها",
     "skills": "مهارت‌ها و شایستگی‌ها", "knowledge": "دانش تخصصی",

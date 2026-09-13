@@ -13,10 +13,15 @@ log = logging.getLogger("engine_manager")
 _COLUMNS = ["job_title", "aliases", "tools", "skills", "knowledge", "abilities",
             "work_context", "career_path_next", "description", "responsibilities"]
 
+# Not a content column and never embedded: who may search the record. NULL rides along
+# as NULL — the engine reads a missing owner as the public corpus.
+_SCOPE_COLUMN = "organization_id"
+
 
 def _approved_dataframe(db: Prisma) -> pd.DataFrame:
     rows = db.jobrecord.find_many(where={"status": JobStatus.approved})
-    return pd.DataFrame([{c: getattr(r, c) or "" for c in _COLUMNS} for r in rows])
+    return pd.DataFrame([{**{c: getattr(r, c) or "" for c in _COLUMNS},
+                          _SCOPE_COLUMN: r.organization_id} for r in rows])
 
 
 class EngineManager:

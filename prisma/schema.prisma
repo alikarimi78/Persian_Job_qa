@@ -39,6 +39,7 @@ model Organization {
   created_at DateTime @default(now()) @db.Timestamp(6)
 
   users User[]
+  jobs  JobRecord[]
 
   @@map("organizations")
 }
@@ -77,15 +78,20 @@ model JobRecord {
   responsibilities String @default("") @db.Text
 
   status JobStatus @default(pending)
+  // NULL is the public corpus: a record every organization searches. A row that names
+  // an organization is searchable only by that organization's accounts.
+  organization_id Int?
   suggested_by Int?
   reviewed_by  Int?
   created_at   DateTime @default(now()) @db.Timestamp(6)
   updated_at   DateTime @default(now()) @updatedAt @db.Timestamp(6)
 
+  organization Organization? @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   suggester User? @relation("suggested_by", fields: [suggested_by], references: [id], onDelete: SetNull, onUpdate: NoAction)
   reviewer  User? @relation("reviewed_by", fields: [reviewed_by], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@index([job_title], map: "ix_jobs_info_job_title")
   @@index([status], map: "ix_jobs_info_status")
+  @@index([organization_id], map: "ix_jobs_info_organization_id")
   @@map("jobs_info")
 }

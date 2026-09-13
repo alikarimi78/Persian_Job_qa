@@ -72,5 +72,12 @@ class OrganizationOut(BaseModel):
         return self.logo_mime is not None
 
 
+# The list and the single read carry one number the others do not: how many job
+# records name this organization. It is what the delete dialog warns with, those
+# records going with the organization.
+class OrganizationRow(OrganizationOut):
+    job_count: int = 0
+
+
 class OrganizationLogoOut(BaseModel):
     logo: str | None = None

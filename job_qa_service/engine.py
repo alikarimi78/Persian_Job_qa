@@ -11,7 +11,8 @@ from sentence_transformers import SentenceTransformer
 from . import profile as profile_match
 from .bm25 import BM25
 from .columns import (DISCOVERY_FIELDS, DISCOVERY_PRIMARY, EXPECTED_COLUMNS,
-                      FIELD_LABELS, PROSE_COLUMNS, RANKED_FIELDS)
+                      FIELD_LABELS, ORGANIZATION_COLUMN, PROSE_COLUMNS,
+                      PUBLIC_ORGANIZATION, RANKED_FIELDS)
 from .config import (ADAPTED_MAX_TOKENS, DISCOVERY_CANDIDATES, DISCOVERY_FLOOR, DISCOVERY_MATCH,
                      DISCOVERY_RELATED, DRAFT_MAX_ITEMS, EMB_BATCH_SIZE, EMB_MAX_SEQ_LEN,
                      EMBED_MODEL_NAME, MAX_CANDIDATES, NAMED_JOB_SPARSE, PAIR_COVER_MARGIN,
@@ -46,6 +47,12 @@ NOT_A_JOB = object()
 TOO_VAGUE = object()
 
 log = logging.getLogger("job_qa_service")
+
+
+# An organization whose accounts can reach no record at all — every row private to
+# somebody else. Nothing to retrieve, so nothing to answer from.
+def _nothing_in_reach(intent):
+    return {"mode": "out_of_domain", "intent": intent, "score": 0.0, "answer": OOD_MESSAGE}
 
 
 def _reorder(items, picks):
@@ -84,7 +91,13 @@ class JobQAEngine:
     def __init__(self, data, rebuild_embeddings=False):
         self.df = self._load_data(data)
         self.titles = self.df["job_title"].tolist()
-        self.title_index = {normalize_text(t): i for i, t in enumerate(self.titles)}
+        # A title can now be held twice — once by the public corpus and once by an
+        # organization that keeps its own version — so the index maps to every record
+        # with that title and the reader takes the first one in its own reach.
+        self.title_index = defaultdict(list)
+        for i, title in enumerate(self.titles):
+            self.title_index[normalize_text(title)].append(i)
+        self.org_ids = self.df[ORGANIZATION_COLUMN].to_numpy()
 
         self.model = shared_model()
         self.emb_full, self.emb_title = self._load_or_build_embeddings(rebuild_embeddings)
@@ -121,6 +134,12 @@ class JobQAEngine:
                 df[col] = ""
             df[col] = df[col].map(normalize_text)
         df = df[df["job_title"].str.len() > 0].reset_index(drop=True)
+        # Nothing outside the database carries the column — the xlsx, the REPL and
+        # `eval_engine` all build a wholly public corpus.
+        column = (df[ORGANIZATION_COLUMN] if ORGANIZATION_COLUMN in df.columns
+                  else PUBLIC_ORGANIZATION)
+        df[ORGANIZATION_COLUMN] = (pd.to_numeric(column, errors="coerce")
+                                   .fillna(PUBLIC_ORGANIZATION).astype(int))
         df["combined_text"] = df.apply(self._combined_text, axis=1)
         return df
 
@@ -163,21 +182,34 @@ class JobQAEngine:
         store.save()
         return emb_full, emb_title
 
-    def _retrieve(self, q_norm):
+    # Which records this caller may reach: None is every one of them, and the scope's
+    # own None is the public corpus. One boolean array over the whole corpus, not a
+    # second engine — the embeddings, the encoder and the BM25 statistics are shared,
+    # and an organization's records are simply the rows a mask keeps.
+    def _mask(self, scope):
+        if scope is None:
+            return None
+        ids = [PUBLIC_ORGANIZATION if o is None else int(o) for o in scope]
+        return np.isin(self.org_ids, ids)
+
+    def _retrieve(self, q_norm, mask=None):
         q_emb = self._encode([q_norm], "query")[0]
         dense = W_FULL * (self.emb_full @ q_emb) + W_TITLE * (self.emb_title @ q_emb)
         sparse = self.bm25.score(q_norm)
 
-        k = min(MAX_CANDIDATES, len(dense))
+        # The candidates come out of the reachable rows rather than being filtered after
+        # the fact: a top-k taken over the whole corpus and masked afterwards would hand
+        # RRF fewer and fewer candidates the narrower the scope.
+        pool = np.arange(len(dense)) if mask is None else np.flatnonzero(mask)
+        k = min(MAX_CANDIDATES, len(pool))
         rrf = defaultdict(float)
-        for rank, idx in enumerate(np.argsort(dense)[::-1][:k]):
-            rrf[int(idx)] += 1.0 / (RRF_K + rank + 1)
-        for rank, idx in enumerate(np.argsort(sparse)[::-1][:k]):
-            rrf[int(idx)] += 1.0 / (RRF_K + rank + 1)
+        for scores in (dense, sparse):
+            for rank, idx in enumerate(pool[np.argsort(scores[pool])[::-1][:k]]):
+                rrf[int(idx)] += 1.0 / (RRF_K + rank + 1)
         order = [i for i, _ in sorted(rrf.items(), key=lambda x: x[1], reverse=True)]
         return order, dense, sparse
 
-    def _resolve_job(self, question, candidate_idxs):
+    def _resolve_job(self, question, candidate_idxs, mask=None):
         records = "\n\n".join(
             f"رکورد {n}:\n{build_context(self.df.iloc[i], DISCOVERY_FIELDS)}"
             for n, i in enumerate(candidate_idxs))
@@ -211,7 +243,17 @@ class JobQAEngine:
             draft[col] = " | ".join([i.strip() for i in draft[col].split("|") if i.strip()][:cap])
         if not draft["job_title"]:
             return None
-        return self.title_index.get(draft["job_title"], draft)
+        held = self._held_title(draft["job_title"], mask)
+        return draft if held is None else held
+
+    # The corpus already holding the composed title is only a duplicate if this caller
+    # could have been shown it; another organization's record of the same name is not
+    # theirs to be answered from, so for them the draft stays a draft.
+    def _held_title(self, title, mask):
+        for i in self.title_index.get(title, ()):
+            if mask is None or mask[i]:
+                return i
+        return None
 
     def _related_titles(self, order, answered=None):
         return [self.df.iloc[i]["job_title"] for i in order
@@ -232,14 +274,16 @@ class JobQAEngine:
     # PAIR_COVER_MARGIN of that half's own best record, and only a missed half is replaced.
     # None when the question does not split into two halves leading to two different,
     # unrelated records: «… مخلوط‌کن و ترکیب مواد» splits, but both halves find the same job.
-    def _combination_pair(self, q_norm, i1, i2):
+    def _combination_pair(self, q_norm, i1, i2, mask=None):
         tokens = q_norm.split()
         at = next((n for n, tok in enumerate(tokens[1:-1], 1) if tok in ("و", "با")), None)
         if at is None:
             return None
         halves = []
         for half in (" ".join(tokens[:at]), " ".join(tokens[at + 1:])):
-            order, dense, _ = self._retrieve(half)
+            order, dense, _ = self._retrieve(half, mask)
+            if not order:
+                return None
             lead = prefer_dense_leader(order, dense)[0]
             if float(dense[lead]) < THRESHOLD_MATCH - 0.05:
                 return None
@@ -263,28 +307,49 @@ class JobQAEngine:
     def _unrelated(self, a, b):
         return a != b and float(self.emb_full[a] @ self.emb_full[b]) < PAIR_SIM_MAX
 
-    # One card for two records: the prose combines them, and each keeps its own boxes.
-    def _combined(self, question, intent, fields, pair, use_llm):
+    # One card for two records: the prose combines them, and each keeps its own boxes. An
+    # explicit combination also composes the combined job — beside the prose, not after it —
+    # so it is offered for filing in the shape every composed job is: `job_draft` with its
+    # `draft_detail`, or a `draft_reason` saying why there is none (`exists`, naming the stored
+    # job in `draft_job`; `not_a_job`; `too_vague`; `unavailable`). The tie fallback composes
+    # nothing, having no reading to compose with.
+    def _combined(self, question, intent, fields, pair, use_llm, mask=None, compose=False):
         ia, s_a, ib, s_b = pair
         row1, row2 = self.df.iloc[ia], self.df.iloc[ib]
-        ans, (picks1, picks2) = self._answer_and_select([
-            {"role": "system", "content": SYSTEM_INTERDISCIPLINARY},
-            {"role": "user", "content":
-                f"شغل اول:\n{build_context(row1, fields)}\n\n"
-                f"شغل دوم:\n{build_context(row2, fields)}\n\nسوال کاربر: {question}"},
-        ], question, [row1, row2], use_llm)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            composing = (pool.submit(self._resolve_job, question, [ia, ib], mask)
+                         if compose and use_llm else None)
+            ans, (picks1, picks2) = self._answer_and_select([
+                {"role": "system", "content": SYSTEM_INTERDISCIPLINARY},
+                {"role": "user", "content":
+                    f"شغل اول:\n{build_context(row1, fields)}\n\n"
+                    f"شغل دوم:\n{build_context(row2, fields)}\n\nسوال کاربر: {question}"},
+            ], question, [row1, row2], use_llm)
+            resolved = composing.result() if composing else None
         if not ans:
             ans = template_two(row1, row2, fields)
-        return {"mode": "interdisciplinary", "intent": intent,
-                "jobs": [row1["job_title"], row2["job_title"]],
-                "scores": [s_a, s_b], "answer": ans,
-                "details": [job_detail(row1, fields, picks1),
-                            job_detail(row2, fields, picks2)]}
+        out = {"mode": "interdisciplinary", "intent": intent,
+               "jobs": [row1["job_title"], row2["job_title"]],
+               "scores": [s_a, s_b], "answer": ans,
+               "details": [job_detail(row1, fields, picks1),
+                           job_detail(row2, fields, picks2)]}
+        if composing is None:
+            return out
+        if isinstance(resolved, dict):
+            return out | {"job_draft": resolved, "draft_detail": job_detail(resolved, fields)}
+        if isinstance(resolved, int):
+            return out | {"draft_reason": "exists",
+                          "draft_job": self.df.iloc[resolved]["job_title"]}
+        return out | {"draft_reason": "not_a_job" if resolved is NOT_A_JOB
+                      else "too_vague" if resolved is TOO_VAGUE else "unavailable"}
 
-    def _discover(self, question, q_norm, use_llm=True, retrieved=None, offline_match=None):
+    def _discover(self, question, q_norm, use_llm=True, retrieved=None,
+                  offline_match=None, mask=None):
         if retrieved is None:
-            retrieved = self._retrieve(q_norm)
+            retrieved = self._retrieve(q_norm, mask)
         order, dense, sparse = retrieved
+        if not order:
+            return _nothing_in_reach("job_request")
         i1 = order[0]
         s1_dense, s1_sparse = float(dense[i1]), float(sparse[i1])
         related = self._related_titles(order)
@@ -296,7 +361,7 @@ class JobQAEngine:
             return {"mode": "out_of_domain", "intent": "job_request",
                     "score": s1_dense, "answer": OOD_MESSAGE}
 
-        resolved = (self._resolve_job(question, order[:DISCOVERY_CANDIDATES])
+        resolved = (self._resolve_job(question, order[:DISCOVERY_CANDIDATES], mask)
                     if use_llm else None)
 
         if resolved is NOT_A_JOB:
@@ -375,7 +440,8 @@ class JobQAEngine:
             picks = [pool.submit(self._select_items, question, row) for row in rows]
             return answer.result(), [pick.result() for pick in picks]
 
-    def analyze(self, profile, use_llm=True):
+    def analyze(self, profile, use_llm=True, scope=None):
+        mask = self._mask(scope)
         prof = profile_match.clean_profile(profile)
         if not prof:
             return {"mode": "out_of_domain", "intent": "profile",
@@ -386,12 +452,15 @@ class JobQAEngine:
         dense = self.emb_full @ q_emb
 
         ranked = []
-        for idx in range(len(self.df)):
+        for idx in (range(len(self.df)) if mask is None else np.flatnonzero(mask)):
             fields, ratio = profile_match.coverage(prof, self.profile_tokens[idx])
             ranked.append((PROFILE_W_DENSE * float(dense[idx]) + PROFILE_W_COVER * ratio,
-                           float(dense[idx]), ratio, fields, idx))
+                           float(dense[idx]), ratio, fields, int(idx)))
         ranked.sort(key=lambda r: r[0], reverse=True)
 
+        if not ranked:
+            return {"mode": "out_of_domain", "intent": "profile",
+                    "answer": PROFILE_NONE, "matches": []}
         best = ranked[0]
         if best[2] <= 0 and best[1] < PROFILE_DENSE_ONLY:
             return {"mode": "out_of_domain", "intent": "profile", "score": best[1],
@@ -416,11 +485,12 @@ class JobQAEngine:
                 "job": matches[0]["job_title"], "score": matches[0]["score"],
                 "matches": matches}
 
-    def answer(self, question, use_llm=True):
+    def answer(self, question, use_llm=True, scope=None):
         q = normalize_text(question)
+        mask = self._mask(scope)
 
         if is_job_request(q):
-            return self._discover(question, q, use_llm)
+            return self._discover(question, q, use_llm, mask=mask)
 
         if is_about_system(q):
             return {"mode": "about", "intent": "about", "answer": ABOUT_MESSAGE}
@@ -435,10 +505,12 @@ class JobQAEngine:
             intent = "description"
         fields = INTENT_TO_FIELDS.get(intent, INTENT_TO_FIELDS["general"])
 
-        order, dense, sparse = self._retrieve(q)
+        order, dense, sparse = self._retrieve(q, mask)
+        if not order:
+            return _nothing_in_reach(intent)
         order = prefer_dense_leader(order, dense)
         order = prefer_title_match(q, order, dense, self.titles)
-        order = prefer_contained_title(q, order, self.titles)
+        order = prefer_contained_title(q, order, self.titles, mask)
         i1 = order[0]
         s1_dense, s1_sparse = float(dense[i1]), float(sparse[i1])
 
@@ -454,7 +526,8 @@ class JobQAEngine:
             return self._discover(
                 question, q, use_llm, (order, dense, sparse),
                 offline_match=lambda dense_, sparse_: (dense_ >= THRESHOLD_MATCH
-                                                       or sparse_ >= NAMED_JOB_SPARSE))
+                                                       or sparse_ >= NAMED_JOB_SPARSE),
+                mask=mask)
 
         if s1_dense < THRESHOLD_MATCH and s1_sparse < THRESHOLD_SPARSE:
             return {"mode": "out_of_domain", "intent": intent,
@@ -468,11 +541,12 @@ class JobQAEngine:
         # question really does name two fields — otherwise the combining word is just a
         # word, as in «داروهای ترکیبی» or «خدمات مشترکین», and the question is a normal one.
         if any(k in q for k in EXPLICIT_COMBO_WORDS):
-            pair = self._combination_pair(q, i1, i2)
+            pair = self._combination_pair(q, i1, i2, mask)
             if pair:
-                return self._combined(question, intent, fields, pair, use_llm)
+                return self._combined(question, intent, fields, pair, use_llm,
+                                      mask=mask, compose=True)
 
-        resolved = (self._resolve_job(question, order[:DISCOVERY_CANDIDATES])
+        resolved = (self._resolve_job(question, order[:DISCOVERY_CANDIDATES], mask)
                     if use_llm else None)
 
         if resolved is NOT_A_JOB:
@@ -490,11 +564,13 @@ class JobQAEngine:
             ans = self._adapted_answer(question, resolved, use_llm)
             if not ans:
                 ans = template_one(resolved, fields)
+            # The composed record rides along as `job_draft` too, so the client can offer it
+            # for filing — the boxes answer the question, the draft is what gets submitted.
             return {"mode": "job_adapted", "intent": intent,
                     "job": resolved["job_title"], "score": s1_dense, "answer": ans,
                     "related_jobs": self._related_titles(order),
                     "nearest": self._nearest_detail(order, fields),
-                    "details": [job_detail(resolved, fields)]}
+                    "details": [job_detail(resolved, fields)], "job_draft": resolved}
 
         # Two records within SECONDARY_MARGIN of each other used to be answered as a
         # combination *before* the resolve step, which is where a job named in one breath

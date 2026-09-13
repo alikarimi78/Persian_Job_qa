@@ -120,9 +120,22 @@ def test_the_other_statuses_are_reachable_but_never_by_default(as_user, world, c
     assert [it["job_title"] for it in body["items"]] == ["افسران پیشنهادی"]
 
 
-@pytest.mark.parametrize("account", ["admin_a", "user_a1", "user_a2"])
-def test_only_a_super_admin_may_read_the_corpus(as_user, world, corpus, account):
+@pytest.mark.parametrize("account", ["user_a1", "user_a2"])
+def test_a_user_may_not_read_the_corpus(as_user, world, corpus, account):
     assert as_user(getattr(world, account))("GET", "/admin/jobs").status_code == 403
+
+
+# An org_admin reads the listing, but the public corpus is not in it: they run their own
+# organization's records, and these belong to everyone.
+def test_an_org_admin_reads_only_their_own_organizations_records(as_user, world, corpus, db):
+    theirs = db.jobrecord.create(data={**COLUMNS, "job_title": "راهبر سامانه سازمانی",
+                                       "status": JobStatus.approved,
+                                       "organization_id": world.org_a.id})
+
+    body = as_user(world.admin_a)("GET", "/admin/jobs").json()
+
+    assert [it["job_title"] for it in body["items"]] == [theirs.job_title]
+    assert body["total"] == 1
 
 
 def test_a_super_admin_edits_a_record_in_the_corpus(as_user, world, corpus, db, rebuilds):
@@ -178,4 +191,66 @@ def test_only_a_super_admin_may_edit_the_corpus(as_user, world, corpus, rebuilds
         "PUT", f"/admin/jobs/{corpus[0].id}", json=edited(job_title="عنوان دیگر"))
 
     assert response.status_code == 403
+    assert rebuilds == []
+
+
+def test_a_super_admin_deletes_a_record_from_the_corpus(as_user, world, corpus, db, rebuilds):
+    response = as_user(world.root)("DELETE", f"/admin/jobs/{corpus[0].id}")
+
+    assert response.status_code == 204
+    assert db.jobrecord.find_unique(where={"id": corpus[0].id}) is None
+    assert rebuilds == [False]
+
+
+def test_deleting_one_record_leaves_the_rest_of_the_corpus(as_user, world, corpus, rebuilds):
+    as_user(world.root)("DELETE", f"/admin/jobs/{corpus[0].id}")
+
+    body = as_user(world.root)("GET", "/admin/jobs").json()
+    assert body["total"] == len(TITLES) - 1
+    assert corpus[0].job_title not in [item["job_title"] for item in body["items"]]
+
+
+@pytest.mark.parametrize("job_status", [JobStatus.pending, JobStatus.rejected])
+def test_only_a_record_in_the_corpus_may_be_deleted_here(as_user, world, db, rebuilds,
+                                                         job_status):
+    record = db.jobrecord.create(data={**COLUMNS, "status": job_status})
+
+    response = as_user(world.root)("DELETE", f"/admin/jobs/{record.id}")
+    assert response.status_code == 409
+    assert db.jobrecord.find_unique(where={"id": record.id}) is not None
+    assert rebuilds == []
+
+
+def test_deleting_a_missing_record_is_404(as_user, world, rebuilds):
+    assert as_user(world.root)("DELETE", "/admin/jobs/9999").status_code == 404
+    assert rebuilds == []
+
+
+@pytest.mark.parametrize("account", ["admin_a", "user_a1"])
+def test_a_public_record_is_deleted_by_the_super_admin_alone(as_user, world, corpus, db,
+                                                             rebuilds, account):
+    response = as_user(getattr(world, account))("DELETE", f"/admin/jobs/{corpus[0].id}")
+
+    assert response.status_code == 403
+    assert db.jobrecord.find_unique(where={"id": corpus[0].id}) is not None
+    assert rebuilds == []
+
+
+def test_an_org_admin_deletes_their_own_organizations_record(as_user, world, db, rebuilds):
+    record = db.jobrecord.create(data={**COLUMNS, "status": JobStatus.approved,
+                                       "organization_id": world.admin_a.organization_id})
+
+    response = as_user(world.admin_a)("DELETE", f"/admin/jobs/{record.id}")
+    assert response.status_code == 204
+    assert db.jobrecord.find_unique(where={"id": record.id}) is None
+    assert rebuilds == [False]
+
+
+def test_an_org_admin_may_not_delete_another_organizations_record(as_user, world, db, rebuilds):
+    record = db.jobrecord.create(data={**COLUMNS, "status": JobStatus.approved,
+                                       "organization_id": world.admin_b.organization_id})
+
+    response = as_user(world.admin_a)("DELETE", f"/admin/jobs/{record.id}")
+    assert response.status_code == 403
+    assert db.jobrecord.find_unique(where={"id": record.id}) is not None
     assert rebuilds == []

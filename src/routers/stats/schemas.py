@@ -11,12 +11,22 @@ class RoleCount(BaseModel):
     count: int
 
 
+# Approved records per organization — the private corpora, one bar each. The public
+# corpus belongs to no organization and is `JobStats.public_records` instead.
+class OrganizationCount(BaseModel):
+    organization_id: int
+    name: str
+    count: int
+
+
 class JobStats(BaseModel):
     corpus_records: int
     engine_records: int | None
     pending: int
     approved: int
     rejected: int
+    public_records: int
+    organization_records: int
 
 
 class StatsOut(BaseModel):
@@ -28,6 +38,7 @@ class StatsOut(BaseModel):
     accounts_blocked: int
     accounts_by_role: list[RoleCount]
     jobs: JobStats
+    jobs_by_organization: list[OrganizationCount] = []
     accounts_series: list[SeriesPoint]
     organizations_series: list[SeriesPoint]
     suggestions_series: list[SeriesPoint]

@@ -33,7 +33,10 @@ def main(xlsx_path: str, overwrite: bool = False, dry_run: bool = False):
     df = _load(xlsx_path)
     connect()
     try:
-        records = db.jobrecord.find_many()
+        # The xlsx is the public corpus, so an organization's own records are neither
+        # filled from it nor allowed to block an insert: two organizations may hold the
+        # same title, and the shared one has to exist too.
+        records = [r for r in db.jobrecord.find_many() if r.organization_id is None]
         approved = [r for r in records if r.status == JobStatus.approved]
         by_key = {}
         for record in approved:

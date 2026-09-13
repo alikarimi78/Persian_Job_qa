@@ -45,6 +45,12 @@ class SearchOut(BaseModel):
     related_jobs: list[str] | None = None
     nearest: JobDetailOut | None = None
     job_draft: dict[str, str] | None = None
+    # A combination's offer: the job composed beside its two records and that job's boxes, or
+    # why there is none — `exists` (the stored job in `draft_job`), `not_a_job`, `too_vague`,
+    # `unavailable`.
+    draft_detail: JobDetailOut | None = None
+    draft_reason: str | None = None
+    draft_job: str | None = None
 
 
 class ProfileSearchIn(BaseModel):
