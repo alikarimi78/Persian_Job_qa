@@ -186,6 +186,12 @@ class JobQAEngine:
     # own None is the public corpus. One boolean array over the whole corpus, not a
     # second engine — the embeddings, the encoder and the BM25 statistics are shared,
     # and an organization's records are simply the rows a mask keeps.
+    # Who owns a stored record, as the API spells it: an organization id, or None for the
+    # public corpus rather than the column's sentinel.
+    def _owner(self, i):
+        owner = int(self.org_ids[i])
+        return None if owner == PUBLIC_ORGANIZATION else owner
+
     def _mask(self, scope):
         if scope is None:
             return None
@@ -386,6 +392,7 @@ class JobQAEngine:
                 ans = template_one(row, DISCOVERY_FIELDS)
             return {"mode": "job_match", "intent": "job_request",
                     "job": row["job_title"], "score": float(dense[resolved]),
+                    "organization_id": self._owner(resolved),
                     "related_jobs": self._related_titles(order, resolved), "answer": ans,
                     "nearest": self._nearest_detail(order, DISCOVERY_PRIMARY, resolved),
                     "details": [job_detail(row, DISCOVERY_PRIMARY, picks)]}
@@ -597,6 +604,7 @@ class JobQAEngine:
             ans = template_one(row1, fields)
         return {"mode": "single", "intent": intent, "job": row1["job_title"],
                 "score": s1_dense, "answer": ans,
+                "organization_id": self._owner(i1),
                 "related_jobs": self._related_titles(order, i1),
                 "nearest": self._nearest_detail(order, fields, i1),
                 "details": [job_detail(row1, fields, picks)]}

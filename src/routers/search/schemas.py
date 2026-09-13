@@ -44,6 +44,8 @@ class SearchOut(BaseModel):
     details: list[JobDetailOut] | None = None
     related_jobs: list[str] | None = None
     nearest: JobDetailOut | None = None
+    # The owner of the stored record a `single`/`job_match` answered from; None is public.
+    organization_id: int | None = None
     job_draft: dict[str, str] | None = None
     # A combination's offer: the job composed beside its two records and that job's boxes, or
     # why there is none — `exists` (the stored job in `draft_job`), `not_a_job`, `too_vague`,
