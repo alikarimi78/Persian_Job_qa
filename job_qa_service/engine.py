@@ -1,7 +1,7 @@
 import logging
 import re
 import threading
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -12,7 +12,8 @@ from . import profile as profile_match
 from .bm25 import BM25
 from .columns import (DISCOVERY_FIELDS, DISCOVERY_PRIMARY, EXPECTED_COLUMNS,
                       FIELD_LABELS, ORGANIZATION_COLUMN, PROSE_COLUMNS,
-                      PUBLIC_ORGANIZATION, RANKED_FIELDS)
+                      PUBLIC_ORGANIZATION, RANKED_FIELDS,
+                      VOCABULARY_FIELDS)
 from .config import (ADAPTED_MAX_TOKENS, DISCOVERY_CANDIDATES, DISCOVERY_FLOOR, DISCOVERY_MATCH,
                      DISCOVERY_RELATED, DRAFT_MAX_ITEMS, EMB_BATCH_SIZE, EMB_MAX_SEQ_LEN,
                      EMBED_MODEL_NAME, MAX_CANDIDATES, NAMED_JOB_SPARSE, PAIR_COVER_MARGIN,
@@ -459,8 +460,9 @@ class JobQAEngine:
         dense = self.emb_full @ q_emb
 
         ranked = []
+        prepared = profile_match.prepare(prof)
         for idx in (range(len(self.df)) if mask is None else np.flatnonzero(mask)):
-            fields, ratio = profile_match.coverage(prof, self.profile_tokens[idx])
+            fields, ratio = profile_match.coverage(prepared, self.profile_tokens[idx])
             ranked.append((PROFILE_W_DENSE * float(dense[idx]) + PROFILE_W_COVER * ratio,
                            float(dense[idx]), ratio, fields, int(idx)))
         ranked.sort(key=lambda r: r[0], reverse=True)
@@ -491,6 +493,21 @@ class JobQAEngine:
         return {"mode": "profile_match", "intent": "profile", "answer": ans,
                 "job": matches[0]["job_title"], "score": matches[0]["score"],
                 "matches": matches}
+
+    # Each vocabulary field's phrases across the records this caller may see, most common first —
+    # what advanced analysis offers while typing, so a person picks «سخن گفتن» rather than describing
+    # the same skill in words no record holds, and the item then counts toward coverage.
+    def vocabulary(self, scope=None):
+        mask = self._mask(scope)
+        rows = self.df if mask is None else self.df[mask]
+        vocabulary = {}
+        for field in VOCABULARY_FIELDS:
+            counts = Counter()
+            for value in rows[field]:
+                counts.update(set(profile_match.record_items(field, value)))
+            vocabulary[field] = [{"text": text, "count": count} for text, count
+                                 in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+        return vocabulary
 
     def answer(self, question, use_llm=True, scope=None):
         q = normalize_text(question)

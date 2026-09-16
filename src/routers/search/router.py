@@ -5,8 +5,9 @@ from src.engine_manager import manager
 from src.models import User
 from src.permissions import visible_job_organizations
 from src.rate_limit import search_rate_limit
+from src.security import get_current_user
 
-from .schemas import ProfileSearchIn, ProfileSearchOut, SearchIn, SearchOut
+from .schemas import ProfileSearchIn, ProfileSearchOut, SearchIn, SearchOut, VocabularyOut
 
 router = APIRouter(tags=["search"])
 
@@ -36,3 +37,12 @@ async def advanced_search(body: ProfileSearchIn, user: User = Depends(search_rat
     result = await run_in_threadpool(engine.analyze, body.profile,
                                      scope=visible_job_organizations(user))
     return result
+
+
+# What advanced analysis offers while typing, read once per page rather than per keystroke, so it
+# spends nothing from the search budget. Drawn from the caller's own reach, like a search.
+@router.get("/search/vocabulary", response_model=VocabularyOut)
+async def vocabulary(user: User = Depends(get_current_user)):
+    engine = ready_engine()
+    fields = await run_in_threadpool(engine.vocabulary, scope=visible_job_organizations(user))
+    return {"fields": fields}

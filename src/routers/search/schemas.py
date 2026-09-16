@@ -106,3 +106,13 @@ class ProfileSearchOut(BaseModel):
     job: str | None = None
     score: float | None = None
     matches: list[ProfileMatchOut] = []
+
+
+class VocabularyItemOut(BaseModel):
+    text: str
+    count: int
+
+
+# The phrases advanced analysis offers while typing, per field, most common first.
+class VocabularyOut(BaseModel):
+    fields: dict[str, list[VocabularyItemOut]]

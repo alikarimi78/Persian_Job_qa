@@ -61,7 +61,12 @@ PROFILE_W_COVER      = 0.5
 PROFILE_DENSE_ONLY   = 0.62
 PROFILE_MIN_ITEMS    = 2
 PROFILE_MIN_FIELDS   = 2
+# A profile word of PROFILE_TOKEN_MIN letters or more matches by prefix either way; a shorter one
+# («حل», «دقت») only exactly, and is required only when its item has no longer word. Below
+# PROFILE_SHORT_MIN a word is dropped. Until 2026-09-16 short words were dropped outright, so
+# «دقت» matched nothing and «دقت کنترل» matched every record holding «کنترل».
 PROFILE_TOKEN_MIN    = 4
+PROFILE_SHORT_MIN    = 2
 
 DENSE_LEAD_MARGIN = 0.03
 DENSE_LEAD_DEPTH  = 5

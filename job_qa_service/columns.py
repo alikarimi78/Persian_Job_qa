@@ -32,5 +32,8 @@ PROFILE_FIELDS = ["skills", "knowledge", "abilities", "responsibilities",
                   "work_context", "career_path_next"]
 
 PROFILE_REQUIRED = ["skills"]
+# The profile fields written in a shared vocabulary, offered while typing in advanced analysis.
+# `responsibilities` is left out: a task statement belongs to one record, not to a vocabulary.
+VOCABULARY_FIELDS = [f for f in PROFILE_FIELDS if f != "responsibilities"]
 
 PROFILE_LABELS = {f: FIELD_LABELS[f] for f in PROFILE_FIELDS}
