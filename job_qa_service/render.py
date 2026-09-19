@@ -68,6 +68,12 @@ def field_items(field, value):
             if p.strip() and p.strip() not in EMPTY_CELLS]
 
 
+# A box folds only when that hides two items or more: six items show all six, since a toggle
+# that opens a single item costs the reader the click the item itself would have cost the page.
+def preview_count(n):
+    return n if n <= PREVIEW_ITEMS + 1 else PREVIEW_ITEMS
+
+
 def job_detail(row, primary_fields, order=None):
     primary = set(primary_fields)
     order = order or {}
@@ -88,7 +94,7 @@ def job_detail(row, primary_fields, order=None):
             "value": "، ".join(items) if items else value,
             "items": items,
             "primary": key in primary,
-            "preview": min(PREVIEW_ITEMS, len(items)),
+            "preview": preview_count(len(items)),
         })
     # The description always leads, whatever was asked; then the columns the answer used, then the
     # rest. The client and the PDF both draw the boxes in exactly this order.

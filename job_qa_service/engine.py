@@ -31,7 +31,7 @@ from .prompts import (SYSTEM_ADAPTED, SYSTEM_INTERDISCIPLINARY, SYSTEM_ITEM_SELE
                       SYSTEM_JOB_MATCH, SYSTEM_JOB_RESOLVE, SYSTEM_PROFILE_ANALYZE,
                       SYSTEM_SINGLE)
 from .ranking import prefer_contained_title, prefer_dense_leader, prefer_title_match
-from .render import (build_context, field_items, job_detail, profile_context,
+from .render import (build_context, field_items, job_detail, preview_count, profile_context,
                      render_draft, template_one, template_profile, template_two)
 from .text import normalize_text, parse_json_object
 
@@ -419,7 +419,8 @@ class JobQAEngine:
         columns = {}
         for field in RANKED_FIELDS:
             items = field_items(field, str(row.get(field, "") or "").strip())
-            if len(items) > PREVIEW_ITEMS:
+            # Only a column that folds has a "which five" to choose; one shown whole is not sent.
+            if preview_count(len(items)) < len(items):
                 columns[field] = items
         if not columns:
             return {}
