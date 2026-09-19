@@ -125,17 +125,20 @@ def test_a_user_may_not_read_the_corpus(as_user, world, corpus, account):
     assert as_user(getattr(world, account))("GET", "/admin/jobs").status_code == 403
 
 
-# An org_admin reads the listing, but the public corpus is not in it: they run their own
-# organization's records, and these belong to everyone.
-def test_an_org_admin_reads_only_their_own_organizations_records(as_user, world, corpus, db):
+# An org_admin reads the public corpus beside their own organization's records — what
+# their searches reach — and never another organization's; editing stays their own alone.
+def test_an_org_admin_reads_the_public_corpus_and_their_own_records(as_user, world, corpus, db):
     theirs = db.jobrecord.create(data={**COLUMNS, "job_title": "راهبر سامانه سازمانی",
                                        "status": JobStatus.approved,
                                        "organization_id": world.org_a.id})
+    db.jobrecord.create(data={**COLUMNS, "job_title": "راهبر سامانه سازمان دیگر",
+                              "status": JobStatus.approved,
+                              "organization_id": world.org_b.id})
 
     body = as_user(world.admin_a)("GET", "/admin/jobs").json()
 
-    assert [it["job_title"] for it in body["items"]] == [theirs.job_title]
-    assert body["total"] == 1
+    assert {it["job_title"] for it in body["items"]} == {*TITLES, theirs.job_title}
+    assert body["total"] == len(TITLES) + 1
 
 
 def test_a_super_admin_edits_a_record_in_the_corpus(as_user, world, corpus, db, rebuilds):

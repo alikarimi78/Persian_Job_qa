@@ -4,7 +4,7 @@ from prisma import Prisma
 from src.database import get_db
 from src.engine_manager import manager
 from src.models import JobRecord, JobStatus, Role, User
-from src.permissions import assert_can_admit_job
+from src.permissions import assert_can_admit_job, visible_job_organizations
 from src.security import require_roles, require_super_admin
 from src.routers.jobs.schemas import JobIn, JobOut, JobPage
 from src.routers.orgs.service import get_organization
@@ -79,7 +79,9 @@ def create_job(body: JobIn, admin: User = Depends(any_admin), db: Prisma = Depen
 
 
 # `page`/`page_size` are clamped rather than validated — a 422 here is enough to take
-# the admin panel down.
+# the admin panel down. An org_admin reads what their organization's searches reach —
+# the public corpus beside their own records — while the writes below still let them
+# change their own alone.
 @router.get("/jobs", response_model=JobPage)
 def list_jobs(q: str = "", page: int = 1, page_size: int = JOBS_PAGE_SIZE,
               job_status: JobStatus = JobStatus.approved,
@@ -87,8 +89,9 @@ def list_jobs(q: str = "", page: int = 1, page_size: int = JOBS_PAGE_SIZE,
               actor: User = Depends(any_admin), db: Prisma = Depends(get_db)):
     page = max(page, 1)
     page_size = min(max(page_size, 1), JOBS_PAGE_MAX)
+    reach = visible_job_organizations(actor)
     where: dict = {"status": job_status,
-                   **organization_filter(actor, organization_id, public)}
+                   **organization_filter(actor, organization_id, public, reach)}
     if q.strip():
         where["OR"] = title_filters(q)
 

@@ -67,12 +67,13 @@ def update_data(body: JobIn, organization_id: int | None) -> dict:
     return data
 
 
-# What this admin may list, and the filter asked for on top of it. An org_admin is
-# confined to their own organization's records; a super_admin sees every one and may
-# narrow to a single organization, or to the public corpus, which `organization_id`
-# alone cannot name — it is the absence of one.
-def organization_filter(actor: User, organization_id: int | None,
-                        public: bool) -> JobRecordWhereInput:
+# What this admin may list, and the filter asked for on top of it. A super_admin sees
+# every record and may narrow to a single organization, or to the public corpus, which
+# `organization_id` alone cannot name — it is the absence of one. An org_admin is
+# confined to `reach`: by default their own organization's records, the ones they
+# decide; a listing they may read beyond what they decide passes a wider one.
+def organization_filter(actor: User, organization_id: int | None, public: bool,
+                        reach: set[int | None] | None = None) -> JobRecordWhereInput:
     if public and organization_id is not None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "Filter by organization_id or by public, not both")
@@ -84,7 +85,8 @@ def organization_filter(actor: User, organization_id: int | None,
 
     if actor.role == Role.super_admin:
         return asked
-    scope: JobRecordWhereInput = {"organization_id": actor.organization_id}
+    owners = reach if reach is not None else {actor.organization_id}
+    scope: JobRecordWhereInput = {"OR": [{"organization_id": owner} for owner in owners]}
     return scope if not asked else {"AND": [scope, asked]}
 
 

@@ -98,6 +98,19 @@ def test_an_org_admin_approves_their_own_organizations_suggestion(as_user, world
     assert rebuilds == [False]
 
 
+def test_an_org_admin_rejects_their_own_organizations_suggestion(as_user, world, owner,
+                                                                db, rebuilds):
+    pending = owner(world.org_a)
+
+    response = as_user(world.admin_a)("POST", f"/admin/suggestions/{pending.id}/reject")
+
+    assert response.status_code == 200
+    stored = db.jobrecord.find_unique(where={"id": pending.id})
+    assert stored.status == JobStatus.rejected
+    assert stored.reviewed_by == world.admin_a.id
+    assert rebuilds == []
+
+
 def test_an_org_admin_may_not_admit_a_record_into_the_public_corpus(as_user, world, owner,
                                                                     db, rebuilds):
     pending = owner(None)
@@ -175,14 +188,39 @@ def test_the_two_filters_are_not_combined(as_user, world, three):
     assert response.status_code == 422
 
 
+# An org_admin reads what their organization's searches reach, the public corpus included,
+# so the listing is the whole of it less the other organizations' records.
+def test_an_org_admin_reads_the_public_corpus_beside_their_own(as_user, world, three):
+    body = as_user(world.admin_a)("GET", "/admin/jobs").json()
+
+    assert {it["job_title"] for it in body["items"]} == {three["public"].job_title,
+                                                         three["a"].job_title}
+    assert body["total"] == 2
+
+
+def test_an_org_admin_narrows_the_listing_to_their_own_organization(as_user, world, three):
+    body = as_user(world.admin_a)(
+        "GET", f"/admin/jobs?organization_id={world.org_a.id}").json()
+
+    assert [it["job_title"] for it in body["items"]] == [three["a"].job_title]
+
+
+def test_an_org_admin_asks_for_the_public_corpus_alone(as_user, world, three):
+    body = as_user(world.admin_a)("GET", "/admin/jobs?public=true").json()
+
+    assert [it["job_title"] for it in body["items"]] == [three["public"].job_title]
+
+
 def test_an_org_admin_asking_for_another_organization_is_told_nothing(as_user, world, three):
     body = as_user(world.admin_a)(
         "GET", f"/admin/jobs?organization_id={world.org_b.id}").json()
     assert body["items"] == []
 
 
-def test_the_suggestion_queue_is_filtered_the_same_way(as_user, world, owner):
-    mine, theirs = owner(world.org_a), owner(world.org_b)
+# The queue does not widen with the listing: a public suggestion is the super admin's to
+# decide, so an org_admin is shown their own organization's alone.
+def test_the_suggestion_queue_stays_the_org_admins_own(as_user, world, owner):
+    mine, theirs, _public = owner(world.org_a), owner(world.org_b), owner(None)
 
     queue = as_user(world.admin_a)("GET", "/admin/suggestions").json()
     assert [it["id"] for it in queue] == [mine.id]
