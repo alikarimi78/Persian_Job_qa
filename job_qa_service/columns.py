@@ -3,9 +3,6 @@ EXPECTED_COLUMNS = ["job_title", "aliases", "tools", "skills", "knowledge", "abi
 
 PROSE_COLUMNS = ["job_title", "description"]
 
-# Not one of the ten, and never part of a record's text: which organization's corpus the
-# record sits in. The DataFrame column is an integer, so the database's NULL — the public
-# corpus every organization searches — arrives here as 0.
 ORGANIZATION_COLUMN = "organization_id"
 PUBLIC_ORGANIZATION = 0
 
@@ -20,7 +17,8 @@ FIELD_LABELS = {
 DISCOVERY_FIELDS = ["description", "responsibilities", "skills", "knowledge", "abilities",
                     "tools", "work_context", "career_path_next"]
 
-DETAIL_FIELDS = DISCOVERY_FIELDS + ["aliases"]
+_DETAIL_TAIL = ["tools", "career_path_next", "aliases"]
+DETAIL_FIELDS = [f for f in DISCOVERY_FIELDS if f not in _DETAIL_TAIL] + _DETAIL_TAIL
 
 RANKED_FIELDS = ["tools", "responsibilities", "career_path_next"]
 
@@ -32,8 +30,6 @@ PROFILE_FIELDS = ["skills", "knowledge", "abilities", "responsibilities",
                   "work_context", "career_path_next"]
 
 PROFILE_REQUIRED = ["skills"]
-# The profile fields written in a shared vocabulary, offered while typing in advanced analysis.
-# `responsibilities` is left out: a task statement belongs to one record, not to a vocabulary.
 VOCABULARY_FIELDS = [f for f in PROFILE_FIELDS if f != "responsibilities"]
 
 PROFILE_LABELS = {f: FIELD_LABELS[f] for f in PROFILE_FIELDS}
