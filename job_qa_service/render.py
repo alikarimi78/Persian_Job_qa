@@ -90,5 +90,7 @@ def job_detail(row, primary_fields, order=None):
             "primary": key in primary,
             "preview": min(PREVIEW_ITEMS, len(items)),
         })
-    fields.sort(key=lambda f: not f["primary"])
+    # The description always leads, whatever was asked; then the columns the answer used, then the
+    # rest. The client and the PDF both draw the boxes in exactly this order.
+    fields.sort(key=lambda f: (f["key"] != "description", not f["primary"]))
     return {"job_title": str(row.get("job_title", "") or "").strip(), "fields": fields}
