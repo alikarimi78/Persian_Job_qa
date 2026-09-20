@@ -10,8 +10,8 @@ from src.routers.jobs.schemas import JobIn, JobOut, JobPage
 from src.routers.orgs.service import get_organization
 
 from .schemas import RebuildStatus
-from .service import (JOBS_PAGE_MAX, JOBS_PAGE_SIZE, approved, organization_filter,
-                      pending, review, target_owner, title_filters, update_data)
+from .service import (JOBS_PAGE_MAX, JOBS_PAGE_SIZE, approved, matching_ids,
+                      organization_filter, pending, review, target_owner, update_data)
 
 # Moderation is the super admin's, with one opening: an org_admin runs their own
 # organization's records — the ones only that organization searches. The public corpus,
@@ -92,12 +92,19 @@ def list_jobs(q: str = "", page: int = 1, page_size: int = JOBS_PAGE_SIZE,
     reach = visible_job_organizations(actor)
     where: dict = {"status": job_status,
                    **organization_filter(actor, organization_id, public, reach)}
-    if q.strip():
-        where["OR"] = title_filters(q)
 
-    total = db.jobrecord.count(where=where)
-    items = db.jobrecord.find_many(where=where, skip=(page - 1) * page_size,
-                                   take=page_size, order={"job_title": "asc"})
+    # A searched listing is paged over the ids the fold matched, in the same order the database would
+    # have returned them; an unsearched one is paged by the database itself.
+    if q.strip():
+        ids = matching_ids(db, where, q)
+        total = len(ids)
+        wanted = ids[(page - 1) * page_size:page * page_size]
+        items = (db.jobrecord.find_many(where={"id": {"in": wanted}},
+                                        order={"job_title": "asc"}) if wanted else [])
+    else:
+        total = db.jobrecord.count(where=where)
+        items = db.jobrecord.find_many(where=where, skip=(page - 1) * page_size,
+                                       take=page_size, order={"job_title": "asc"})
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 

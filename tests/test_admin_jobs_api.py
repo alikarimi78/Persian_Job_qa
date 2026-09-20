@@ -110,6 +110,24 @@ def test_arabic_letters_are_folded_onto_the_persian_ones(as_user, world, corpus)
     assert body["total"] == 1
 
 
+# Both sides are folded, so a title the corpus stores with a hamza is found by the plain spelling and
+# by its own, and the marks a paste carries are dropped.
+@pytest.mark.parametrize("typed", ["تأسیسات", "تاسیسات", "مسئولان", "مسیولان", "مسئولان تأسیسات"])
+def test_a_hamza_is_read_as_its_plain_spelling_and_back(as_user, world, corpus, db, typed):
+    db.jobrecord.create(data={**COLUMNS, "job_title": "مسئولان تأسیسات ساختمانی",
+                              "status": JobStatus.approved})
+
+    body = as_user(world.root)("GET", f"/admin/jobs?q={typed}").json()
+
+    assert [it["job_title"] for it in body["items"]] == ["مسئولان تأسیسات ساختمانی"]
+
+
+@pytest.mark.parametrize("typed", ["حسابدارانِ و حسابرسان", "حسابدارانِ", "حسابداران"])
+def test_the_marks_a_paste_carries_are_dropped(as_user, world, corpus, typed):
+    body = as_user(world.root)("GET", f"/admin/jobs?q={typed}").json()
+    assert [it["job_title"] for it in body["items"]] == ["حسابداران و حسابرسان"]
+
+
 def test_a_search_matching_nothing_is_an_empty_page(as_user, world, corpus):
     body = as_user(world.root)("GET", "/admin/jobs?q=خلبان").json()
     assert body == {"items": [], "total": 0, "page": 1, "page_size": 20}

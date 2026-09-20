@@ -1,5 +1,6 @@
 from fastapi import HTTPException, status
 from prisma import Prisma
+from prisma.partials import JobTitleRow
 from prisma.types import JobRecordWhereInput
 
 from src.models import JobRecord, JobStatus, Role, User
@@ -90,11 +91,23 @@ def organization_filter(actor: User, organization_id: int | None, public: bool,
     return scope if not asked else {"AND": [scope, asked]}
 
 
-# `contains` is literal and the corpus is hazm-normalized, so the row says
-# «برنامه‌نویسان» while an admin types «برنامه نویسان»: OR the query with its
-# space↔ZWNJ variants, folding Arabic ي/ك onto Persian ی/ک first.
-def title_filters(query: str) -> list[dict]:
-    query = query.strip().replace("ي", "ی").replace("ك", "ک")
-    forms = {query, query.replace(" ", _ZWNJ), query.replace(_ZWNJ, " ")}
-    return [{"job_title": {"contains": form, "mode": "insensitive"}}
-            for form in forms if form]
+# Two spellings read as one, the folding the client's `utils/text.js` does: Arabic letter forms and
+# hamza onto their Persian spellings, the marks dropped, a half-space read as a space, case ignored.
+# The corpus is hazm-normalized and holds no Arabic ي/ك, but it does hold «مسئول» and «تأسیسات», so
+# **both sides are folded** — folding the query alone would lose exactly those.
+_FOLD = str.maketrans({"ي": "ی", "ى": "ی", "ك": "ک", "ؤ": "و", "ئ": "ی", "أ": "ا", "إ": "ا",
+                       "ٱ": "ا", "ة": "ه", "ۀ": "ه", _ZWNJ: " ",
+                       **{chr(mark): None for mark in range(0x064B, 0x0671)}})
+
+
+def fold_title(text: str) -> str:
+    return " ".join(str(text or "").lower().translate(_FOLD).split())
+
+
+# `contains` matches what is stored, byte for byte, so the folded search cannot be a database filter:
+# every title the caller may reach is read instead — its id and title alone (`JobTitleRow`), the corpus
+# being ~1120 of them — and compared in Python. The page itself is then fetched whole, by id.
+def matching_ids(db: Prisma, where: JobRecordWhereInput, query: str) -> list[int]:
+    folded = fold_title(query)
+    rows = JobTitleRow.prisma(db).find_many(where=where, order={"job_title": "asc"})
+    return [row.id for row in rows if folded in fold_title(row.job_title)]
