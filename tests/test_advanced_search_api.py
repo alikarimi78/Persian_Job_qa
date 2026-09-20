@@ -67,7 +67,9 @@ def ask(client, user, profile):
                        headers={"Authorization": f"Bearer {create_token(user)}"})
 
 
-VALID = {"skills": ["رانندگی", "هدف‌گیری"], "knowledge": ["سامانه‌های زرهی"]}
+# A profile the validator accepts: every required field, each with the items it asks for.
+VALID = {"skills": ["رانندگی", "هدف‌گیری"], "knowledge": ["سامانه‌های زرهی"],
+         "abilities": ["دقت"], "work_context": ["شرایط سخت"]}
 
 
 def test_a_profile_comes_back_ranked(world, engine, client):
@@ -88,10 +90,12 @@ def test_every_match_carries_the_breakdown_and_the_record(world, engine, client)
 
 
 def test_the_engine_is_handed_the_cleaned_profile(world, engine, client):
-    ask(client, world.user_a1, {"skills": ["  رانندگی  ", "", "هدف‌گیری"],
+    ask(client, world.user_a1, {**VALID, "skills": ["  رانندگی  ", "", "هدف‌گیری"],
                                 "abilities": ["دقت", "   "]})
     assert engine.profiles[-1] == {"skills": ["رانندگی", "هدف‌گیری"],
-                                   "abilities": ["دقت"]}
+                                   "knowledge": ["سامانه‌های زرهی"],
+                                   "abilities": ["دقت"],
+                                   "work_context": ["شرایط سخت"]}
 
 
 def test_an_unknown_field_is_refused_by_name(world, engine, client):
@@ -104,8 +108,17 @@ def test_tools_is_not_a_profile_field(world, engine, client):
     assert ask(client, world.user_a1, {**VALID, "tools": ["آچار"]}).status_code == 422
 
 
+# Each required field is asked for by name, and `skills` for two items rather than one.
+@pytest.mark.parametrize("field", ["skills", "knowledge", "abilities", "work_context"])
+def test_a_profile_missing_a_required_field_is_refused(world, engine, client, field):
+    response = ask(client, world.user_a1, {k: v for k, v in VALID.items() if k != field})
+
+    assert response.status_code == 422
+    assert field in response.text
+
+
 @pytest.mark.parametrize("profile", [
-    {"skills": ["رانندگی"], "knowledge": ["سامانه‌های زرهی"]},
+    {**VALID, "skills": ["رانندگی"]},
     {"skills": ["رانندگی", "هدف‌گیری"]},
     {"knowledge": ["سامانه‌های زرهی"], "abilities": ["دقت"]},
     {},
@@ -115,7 +128,8 @@ def test_a_thin_profile_is_refused(world, engine, client, profile):
 
 
 def test_a_profile_that_is_only_blanks_is_thin_too(world, engine, client):
-    assert ask(client, world.user_a1, {"skills": ["", "  "], "abilities": [""]}).status_code == 422
+    blank = {key: ["", "  "] for key in VALID}
+    assert ask(client, world.user_a1, blank).status_code == 422
 
 
 def test_the_item_count_is_capped(world, engine, client):

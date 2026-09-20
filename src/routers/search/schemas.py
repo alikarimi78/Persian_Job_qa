@@ -7,9 +7,14 @@ from pydantic import BaseModel, Field, StringConstraints, field_validator
 # import it; the frontend's `search/AdvancedSearch.jsx:FIELDS` is the third copy.
 PROFILE_FIELDS = ["skills", "knowledge", "abilities", "responsibilities",
                   "work_context", "career_path_next"]
-PROFILE_REQUIRED_FIELD = "skills"
-PROFILE_MIN_ITEMS = 2
-PROFILE_MIN_FIELDS = 2
+# What a profile must carry, and how many items each field needs. `skills` is the spine of
+# the ranking — O*NET's ten basic skills, which every record has — and the three beside it
+# are what tell two jobs with the same skills apart; a profile of skills alone ranked far
+# too many of them equally well. `responsibilities` and `career_path_next` stay optional:
+# the first is free wording rather than a vocabulary, the second is where the reader wants
+# to go rather than what they can do. They carry the whole rule, so there is no separate
+# "at least N fields" check any more.
+PROFILE_REQUIRED = {"skills": 2, "knowledge": 1, "abilities": 1, "work_context": 1}
 PROFILE_MAX_ITEMS = 20
 
 ProfileItem = Annotated[str, StringConstraints(max_length=120)]
@@ -73,12 +78,9 @@ class ProfileSearchIn(BaseModel):
             if kept:
                 cleaned[key] = kept
 
-        required = cleaned.get(PROFILE_REQUIRED_FIELD, [])
-        if len(required) < PROFILE_MIN_ITEMS:
-            raise ValueError(
-                f"{PROFILE_REQUIRED_FIELD}: at least {PROFILE_MIN_ITEMS} items are required")
-        if len(cleaned) < PROFILE_MIN_FIELDS:
-            raise ValueError(f"At least {PROFILE_MIN_FIELDS} fields must be filled in")
+        for field, minimum in PROFILE_REQUIRED.items():
+            if len(cleaned.get(field, [])) < minimum:
+                raise ValueError(f"{field}: at least {minimum} items are required")
         return cleaned
 
 

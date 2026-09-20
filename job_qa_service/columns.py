@@ -29,7 +29,8 @@ EMPTY_CELLS = {"", "-", "–", "—", "_"}
 PROFILE_FIELDS = ["skills", "knowledge", "abilities", "responsibilities",
                   "work_context", "career_path_next"]
 
-PROFILE_REQUIRED = ["skills"]
+# The client and `routers/search/schemas.py` hold the same list; that one carries the counts.
+PROFILE_REQUIRED = ["skills", "knowledge", "abilities", "work_context"]
 VOCABULARY_FIELDS = [f for f in PROFILE_FIELDS if f != "responsibilities"]
 
 PROFILE_LABELS = {f: FIELD_LABELS[f] for f in PROFILE_FIELDS}
