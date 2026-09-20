@@ -1,9 +1,9 @@
 from prisma.enums import JobStatus, Role
-from prisma.models import JobRecord, Organization, User
+from prisma.models import JobRecord, Organization, SavedSearch, User
 from prisma.partials import OrganizationSummary
 
 __all__ = ["JobRecord", "JobStatus", "Organization", "OrganizationSummary", "Role",
-           "User", "display_name", "full_name", "has_logo", "join_name",
+           "SavedSearch", "User", "display_name", "full_name", "has_logo", "join_name",
            "scope_organization_id"]
 
 

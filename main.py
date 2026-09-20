@@ -5,7 +5,7 @@ from fastapi import FastAPI
 
 from src.database import connect, disconnect
 from src.engine_manager import manager
-from src.routers import accounts, admin, auth, jobs, orgs, reports, search, stats
+from src.routers import accounts, admin, auth, jobs, orgs, reports, saved, search, stats
 
 log = logging.getLogger("main")
 
@@ -26,6 +26,7 @@ app = FastAPI(title="Persian Occupation Analysing API", version="1.0.0", lifespa
 app.include_router(auth.router)
 app.include_router(search.router)
 app.include_router(reports.router)
+app.include_router(saved.router)
 app.include_router(jobs.router)
 app.include_router(admin.router)
 app.include_router(orgs.router)

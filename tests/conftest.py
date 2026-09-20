@@ -56,12 +56,13 @@ from src.routers import auth as auth_router
 from src.routers import jobs as jobs_router
 from src.routers import orgs as orgs_router
 from src.routers import reports as reports_router
+from src.routers import saved as saved_router
 from src.routers import stats as stats_router
 
 PASSWORD = "Correct-horse-battery1"
 _HASHED = hash_password(PASSWORD)
 
-TABLES = ("jobs_info", "users", "organizations")
+TABLES = ("saved_searches", "jobs_info", "users", "organizations")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -123,6 +124,7 @@ def app(db) -> FastAPI:
     api.include_router(orgs_router.router)
     api.include_router(stats_router.router)
     api.include_router(reports_router.router)
+    api.include_router(saved_router.router)
     api.include_router(admin_router.router)
     api.include_router(jobs_router.router)
     return api
