@@ -17,7 +17,8 @@ from .columns import (DISCOVERY_FIELDS, DISCOVERY_PRIMARY, EXPECTED_COLUMNS,
 from .config import (ADAPTED_MAX_TOKENS, DISCOVERY_CANDIDATES, DISCOVERY_FLOOR, DISCOVERY_MATCH,
                      DISCOVERY_RELATED, DRAFT_MAX_ITEMS, EMB_BATCH_SIZE, EMB_MAX_SEQ_LEN,
                      EMBED_MODEL_NAME, MAX_CANDIDATES, NAMED_JOB_SPARSE, PAIR_COVER_MARGIN,
-                     PAIR_SIM_MAX, PREVIEW_ITEMS, PROFILE_DENSE_ONLY, PROFILE_TOP_N,
+                     PAIR_SIM_MAX, PREVIEW_ITEMS, PROFILE_DENSE_CEIL, PROFILE_DENSE_FLOOR,
+                     PROFILE_DENSE_ONLY, PROFILE_KNOWN_MIN, PROFILE_MAX_TOKENS, PROFILE_TOP_N,
                      PROFILE_W_COVER, PROFILE_W_DENSE, RESOLVE_MAX_TOKENS, RRF_K, SCAN_DEPTH,
                      SECONDARY_MARGIN, SECONDARY_MIN, SELECT_MAX_TOKENS, THRESHOLD_MATCH,
                      THRESHOLD_SPARSE, W_FULL, W_TITLE)
@@ -54,6 +55,12 @@ log = logging.getLogger("job_qa_service")
 # somebody else. Nothing to retrieve, so nothing to answer from.
 def _nothing_in_reach(intent):
     return {"mode": "out_of_domain", "intent": intent, "score": 0.0, "answer": OOD_MESSAGE}
+
+
+# A cosine that never leaves the middle of its range, read onto 0..1 — see PROFILE_DENSE_FLOOR.
+def _scaled(score):
+    span = PROFILE_DENSE_CEIL - PROFILE_DENSE_FLOOR
+    return min(1.0, max(0.0, (score - PROFILE_DENSE_FLOOR) / span))
 
 
 def _reorder(items, picks):
@@ -136,9 +143,11 @@ class JobQAEngine:
             df[col] = df[col].map(normalize_text)
         df = df[df["job_title"].str.len() > 0].reset_index(drop=True)
         # Nothing outside the database carries the column — the xlsx, the REPL and
-        # `eval_engine` all build a wholly public corpus.
+        # `eval_engine` all build a wholly public corpus. A Series either way: the bare
+        # sentinel made `pd.to_numeric` return a scalar, which has no `.fillna`, and every
+        # corpus built from anything but the database died there.
         column = (df[ORGANIZATION_COLUMN] if ORGANIZATION_COLUMN in df.columns
-                  else PUBLIC_ORGANIZATION)
+                  else pd.Series(PUBLIC_ORGANIZATION, index=df.index))
         df[ORGANIZATION_COLUMN] = (pd.to_numeric(column, errors="coerce")
                                    .fillna(PUBLIC_ORGANIZATION).astype(int))
         df["combined_text"] = df.apply(self._combined_text, axis=1)
@@ -460,19 +469,29 @@ class JobQAEngine:
         q_emb = self._encode([q_norm], "query")[0]
         dense = self.emb_full @ q_emb
 
-        ranked = []
-        prepared = profile_match.prepare(prof)
-        for idx in (range(len(self.df)) if mask is None else np.flatnonzero(mask)):
-            fields, ratio = profile_match.coverage(prepared, self.profile_tokens[idx])
-            ranked.append((PROFILE_W_DENSE * float(dense[idx]) + PROFILE_W_COVER * ratio,
-                           float(dense[idx]), ratio, fields, int(idx)))
-        ranked.sort(key=lambda r: r[0], reverse=True)
-
-        if not ranked:
+        pool = [int(i) for i in (range(len(self.df)) if mask is None else np.flatnonzero(mask))]
+        if not pool:
             return {"mode": "out_of_domain", "intent": "profile",
                     "answer": PROFILE_NONE, "matches": []}
+
+        # One pass over everything in reach, not a shortlist: a record holding every item the
+        # person typed must not be lost because dense ranked it twentieth. The weights each item
+        # is scored with come out of that same pass, so the ranking is done in `profile.rank` and
+        # only the two channels are mixed here.
+        prepared = profile_match.prepare(prof)
+        measured = profile_match.rank(prepared, [self.profile_tokens[i] for i in pool])
+        ranked = [(PROFILE_W_DENSE * _scaled(float(dense[idx])) + PROFILE_W_COVER * weighted,
+                   float(dense[idx]), ratio, fields, idx)
+                  for idx, (fields, ratio, weighted) in zip(pool, measured)]
+        ranked.sort(key=lambda r: r[0], reverse=True)
+
         best = ranked[0]
-        if best[2] <= 0 and best[1] < PROFILE_DENSE_ONLY:
+        # Which items the corpus has a word for at all is a property of the corpus, not of one
+        # record, so the leader's fields carry it for the whole ranking — and a profile it knows
+        # too little of is refused before a lone accidental match can be read as full coverage.
+        known = sum(len(f["matched"]) + len(f["missing"]) for f in best[3])
+        typed = known + sum(len(f["unknown"]) for f in best[3])
+        if known < PROFILE_KNOWN_MIN * typed or (best[2] <= 0 and best[1] < PROFILE_DENSE_ONLY):
             return {"mode": "out_of_domain", "intent": "profile", "score": best[1],
                     "answer": PROFILE_NONE, "matches": []}
 
@@ -487,7 +506,7 @@ class JobQAEngine:
         ans = self.llm([
             {"role": "system", "content": SYSTEM_PROFILE_ANALYZE},
             {"role": "user", "content": profile_context(prof, matches)},
-        ], temperature=0.3, max_tokens=700) if use_llm else ""
+        ], temperature=0.3, max_tokens=PROFILE_MAX_TOKENS) if use_llm else ""
         if not ans:
             ans = template_profile(matches)
 

@@ -22,8 +22,15 @@ DRAFT_QUESTION = ("مشخصات کامل این شغل در ادامه آمده 
 PROFILE_HEADER = "بر اساس پروفایل واردشده، نزدیک‌ترین مشاغل موجود در پایگاه داده به شرح زیر است:"
 PROFILE_COVER_LABEL = "پوشش موارد شما"
 PROFILE_MISSING_LABEL = "پوشش داده نشد"
+# The third bucket: an item no record in reach holds in any column. It is a gap in the corpus's
+# wording, not in the person, and saying so is the whole difference between «۰٪ پوشش» on a correct
+# ranking and an answer the reader can act on.
+PROFILE_UNKNOWN_LABEL = "در واژگان پایگاه داده یافت نشد"
+PROFILE_RECORD_LABEL = "موارد ثبت‌شده این شغل"
+PROFILE_ELSEWHERE_LABEL = "در ستون"
 PROFILE_NONE = ("هیچ شغلی در پایگاه داده با موارد واردشده هم‌خوانی ندارد. "
-                "می‌توانید تعداد موارد را کاهش دهید یا آن‌ها را کلی‌تر وارد نمایید.")
+                "موارد خود را از فهرست پیشنهادی که هنگام تایپ نمایش داده می‌شود انتخاب نمایید؛ "
+                "واژگان پایگاه داده محدود است و عبارتی که در آن ثبت نشده باشد قابل تطبیق نیست.")
 
 DISCOVERY_UNAVAILABLE = ("امکان ایجاد شغل پیشنهادی در حال حاضر فراهم نیست. "
                          "نزدیک‌ترین مشاغل موجود در پایگاه داده در ادامه آمده است.")

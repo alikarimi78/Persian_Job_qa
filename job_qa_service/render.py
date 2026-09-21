@@ -1,7 +1,8 @@
 from .columns import (DETAIL_FIELDS, EMPTY_CELLS, FIELD_LABELS, PROSE_COLUMNS)
-from .config import PREVIEW_ITEMS
-from .messages import (DRAFT_HEADER, DRAFT_QUESTION, PROFILE_COVER_LABEL, PROFILE_HEADER,
-                       PROFILE_MISSING_LABEL)
+from .config import PREVIEW_ITEMS, PROFILE_CONTEXT_ITEMS, PROFILE_RECORD_MATCHES
+from .messages import (DRAFT_HEADER, DRAFT_QUESTION, PROFILE_COVER_LABEL,
+                       PROFILE_ELSEWHERE_LABEL, PROFILE_HEADER, PROFILE_MISSING_LABEL,
+                       PROFILE_RECORD_LABEL, PROFILE_UNKNOWN_LABEL)
 
 
 def build_context(row, fields, include_title=True):
@@ -39,11 +40,24 @@ def template_profile(matches):
         for field in match["fields"]:
             if field["matched"]:
                 lines.append(f"{field['label']} — {PROFILE_COVER_LABEL}: "
-                             + "، ".join(field["matched"]))
+                             + "، ".join(_located(field)))
             if field["missing"]:
                 lines.append(f"{field['label']} — {PROFILE_MISSING_LABEL}: "
                              + "، ".join(field["missing"]))
+            if field.get("unknown"):
+                lines.append(f"{field['label']} — {PROFILE_UNKNOWN_LABEL}: "
+                             + "، ".join(field["unknown"]))
     return "\n".join(lines)
+
+
+# A matched item says where it was found when that is not the column it was typed in — this is what
+# lets the answer explain that «برنامه‌نویسی» is covered by the record's duties rather than claim a
+# closed skills vocabulary holds it.
+def _located(field):
+    where = field.get("found_in") or {}
+    return [item + (f" ({PROFILE_ELSEWHERE_LABEL} {FIELD_LABELS.get(where[item], where[item])})"
+                    if item in where else "")
+            for item in field["matched"]]
 
 
 def profile_context(profile, matches):
@@ -53,11 +67,22 @@ def profile_context(profile, matches):
     for n, match in enumerate(matches, 1):
         lines += ["", f"شغل {n}: {match['job_title']}"]
         for field in match["fields"]:
-            lines.append(
-                f"{field['label']} — {PROFILE_COVER_LABEL}: "
-                + ("، ".join(field["matched"]) or "—")
-                + f" / {PROFILE_MISSING_LABEL}: "
-                + ("، ".join(field["missing"]) or "—"))
+            line = (f"{field['label']} — {PROFILE_COVER_LABEL}: "
+                    + ("، ".join(_located(field)) or "—")
+                    + f" / {PROFILE_MISSING_LABEL}: "
+                    + ("، ".join(field["missing"]) or "—"))
+            if field.get("unknown"):
+                line += f" / {PROFILE_UNKNOWN_LABEL}: " + "، ".join(field["unknown"])
+            lines.append(line)
+        # The record itself, not only the verdict on it: without this the model can say an item was
+        # not covered but never what the job holds instead, which is the one thing worth reading.
+        if n > PROFILE_RECORD_MATCHES:
+            continue
+        lines.append(f"{PROFILE_RECORD_LABEL}:")
+        for field in match["detail"]["fields"]:
+            if field["key"] == "description" or field["primary"]:
+                items = field["items"][:PROFILE_CONTEXT_ITEMS] or [field["value"]]
+                lines.append(f"  {field['label']}: " + "، ".join(items))
     return "\n".join(lines)
 
 

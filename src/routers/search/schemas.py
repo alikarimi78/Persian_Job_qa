@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, StringConstraints, field_validator
 # copy exists because `tests/conftest.py` stubs the engine away, so this module cannot
 # import it; the frontend's `search/AdvancedSearch.jsx:FIELDS` is the third copy.
 PROFILE_FIELDS = ["skills", "knowledge", "abilities", "responsibilities",
-                  "work_context", "career_path_next"]
+                  "work_context", "career_path_next", "tools"]
 # What a profile must carry, and how many items each field needs. `skills` is the spine of
 # the ranking — O*NET's ten basic skills, which every record has — and the three beside it
 # are what tell two jobs with the same skills apart; a profile of skills alone ranked far
@@ -89,6 +89,11 @@ class ProfileFieldOut(BaseModel):
     label: str
     matched: list[str] = []
     missing: list[str] = []
+    # Items no record in reach holds in any column: the corpus has no word for them, so they are
+    # neither covered nor missing and count toward neither ratio.
+    unknown: list[str] = []
+    # A matched item found outside the column it was typed in, and which column that was.
+    found_in: dict[str, str] = {}
     ratio: float
 
 

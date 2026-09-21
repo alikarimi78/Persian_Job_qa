@@ -29,6 +29,8 @@ class FakeEngine:
                 "score": 0.61, "dense": 0.73, "coverage": 0.5,
                 "fields": [{"key": "skills", "label": "مهارت‌ها و شایستگی‌ها",
                             "matched": ["هدف‌گیری"], "missing": ["رانندگی"],
+                            "unknown": ["اسب‌سواری"],
+                            "found_in": {"هدف‌گیری": "responsibilities"},
                             "ratio": 0.5}],
                 "detail": {"job_title": "خدمه پدافند ضدزره",
                            "fields": [{"key": "skills", "label": "مهارت‌ها و شایستگی‌ها",
@@ -104,8 +106,16 @@ def test_an_unknown_field_is_refused_by_name(world, engine, client):
     assert "salary" in response.text
 
 
-def test_tools_is_not_a_profile_field(world, engine, client):
-    assert ask(client, world.user_a1, {**VALID, "tools": ["آچار"]}).status_code == 422
+# Tools are a profile field: the column is what a person naming «پایتون» is really describing.
+def test_tools_is_a_profile_field(world, engine, client):
+    assert ask(client, world.user_a1, {**VALID, "tools": ["آچار"]}).status_code == 200
+    assert engine.profiles[-1]["tools"] == ["آچار"]
+
+
+def test_a_field_carries_its_unknown_items_and_where_a_match_was_found(world, engine, client):
+    field = ask(client, world.user_a1, VALID).json()["matches"][0]["fields"][0]
+    assert field["unknown"] == ["اسب‌سواری"]
+    assert field["found_in"] == {"هدف‌گیری": "responsibilities"}
 
 
 # Each required field is asked for by name, and `skills` for two items rather than one.
