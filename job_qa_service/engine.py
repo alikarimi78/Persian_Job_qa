@@ -24,7 +24,8 @@ from .config import (ADAPTED_MAX_TOKENS, DISCOVERY_CANDIDATES, DISCOVERY_FLOOR, 
                      THRESHOLD_SPARSE, W_FULL, W_TITLE)
 from .emb_store import store
 from .intents import (EXPLICIT_COMBO_WORDS, INTENT_TO_FIELDS, detect_intent,
-                      is_about_system, is_bare_name, is_greeting, is_job_request)
+                      definition_subject, is_about_system, is_bare_name, is_greeting,
+                      is_job_request)
 from .llm import LLMClient
 from .messages import (ABOUT_MESSAGE, DISCOVERY_NOT_REAL, DISCOVERY_UNAVAILABLE,
                        DISCOVERY_VAGUE, GREETING_MESSAGE, OOD_MESSAGE, PROFILE_NONE)
@@ -58,6 +59,14 @@ def _nothing_in_reach(intent):
 
 
 # A cosine that never leaves the middle of its range, read onto 0..1 — see PROFILE_DENSE_FLOOR.
+def _joined(text):
+    return text.replace("\u200c", "").replace(" ", "")
+
+
+def _boundaries(text):
+    return text.count(" ") + text.count("\u200c")
+
+
 def _scaled(score):
     span = PROFILE_DENSE_CEIL - PROFILE_DENSE_FLOOR
     return min(1.0, max(0.0, (score - PROFILE_DENSE_FLOOR) / span))
@@ -257,6 +266,13 @@ class JobQAEngine:
             draft[col] = re.sub(r"\s*\|\s*", "، ", draft[col]).strip("، ")
         for col, cap in DRAFT_MAX_ITEMS.items():
             draft[col] = " | ".join([i.strip() for i in draft[col].split("|") if i.strip()][:cap])
+        # The title is the user's own, and the one licensed repair is a *missing* separator. So when the
+        # model's title is the typed one with a space swallowed, the typed spelling wins — «ذی حساب»
+        # normalizes to «ذی‌حساب», never «ذیحساب» — while a ZWNJ the model added is kept.
+        typed = normalize_text(question)
+        title = draft["job_title"]
+        if _joined(title) == _joined(typed) and _boundaries(title) < _boundaries(typed):
+            draft["job_title"] = typed
         if not draft["job_title"]:
             return None
         held = self._held_title(draft["job_title"], mask)
@@ -537,6 +553,11 @@ class JobQAEngine:
 
         if is_greeting(q):
             return {"mode": "about", "intent": "greeting", "answer": GREETING_MESSAGE}
+
+        # «X چیست؟» is X asked for by name: answered as the name is, from the same retrieval.
+        subject = definition_subject(q)
+        if subject:
+            question, q = subject, subject
 
         intent = detect_intent(q)
 

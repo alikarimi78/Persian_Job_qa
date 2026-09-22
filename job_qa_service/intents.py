@@ -143,6 +143,24 @@ def _forms(word):
     return (word,)
 
 
+# A definition question names its subject and asks what it is, which is what the bare name asks on its
+# own — so «ذی‌حساب چیست؟» is answered as «ذی‌حساب» is, through `_discover`, rather than meeting the
+# question path's stricter gate: it retrieved 0.495 dense and 0.0 sparse and was refused with no call
+# made, while the name alone (0.514) composed the record. The tail only counts after a bare name, so
+# «وظایف افسر توپخانه چیست؟» keeps its keyword and stays a question about one column.
+DEFINITION_TAILS = (("چیست",), ("چیه",), ("کیست",), ("کیه",), ("چی", "هست"), ("چی", "هستش"),
+                    ("یعنی", "چه"), ("یعنی", "چی"), ("چه", "شغلی", "است"), ("به", "چه", "معناست"))
+
+
+def definition_subject(question):
+    tokens = _tokens(question)
+    for tail in DEFINITION_TAILS:
+        if len(tokens) > len(tail) and tuple(tokens[-len(tail):]) == tail:
+            subject = " ".join(tokens[:-len(tail)])
+            return subject if is_bare_name(subject) else None
+    return None
+
+
 def is_bare_name(question):
     tokens = _tokens(question)
     if not tokens or len(set(tokens)) > BARE_NAME_MAX_TOKENS:
