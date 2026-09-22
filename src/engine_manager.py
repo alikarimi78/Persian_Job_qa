@@ -4,7 +4,7 @@ import threading
 import pandas as pd
 from prisma import Prisma
 
-from job_qa_service import JobQAEngine
+from src.ai_engine import JobQAEngine
 from .database import db as _db
 from .models import JobStatus
 

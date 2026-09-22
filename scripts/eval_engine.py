@@ -3,8 +3,8 @@ import random
 import sys
 import time
 
-from job_qa_service import JobQAEngine, normalize_text
-from job_qa_service.config import OCCUPATIONS_PATH
+from src.ai_engine import JobQAEngine, normalize_text
+from src.ai_engine.config import OCCUPATIONS_PATH
 
 OOD_PROBES = [
     "طرز تهیه قورمه‌سبزی چیست؟", "قیمت دلار امروز چند است؟", "بهترین گوشی سال کدام است؟",

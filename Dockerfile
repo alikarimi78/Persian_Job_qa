@@ -26,7 +26,6 @@ COPY prisma ./prisma
 RUN prisma py fetch \
  && prisma generate --schema=prisma/schema.prisma
 
-COPY job_qa_service ./job_qa_service
 COPY src ./src
 COPY scripts ./scripts
 COPY main.py ./
@@ -34,4 +33,4 @@ COPY Merged_Occupations.xlsx ./
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "python -m scripts.prisma_cli migrate deploy && python -m scripts.seed_from_xlsx Merged_Occupations.xlsx && uvicorn main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "python -m scripts.prisma_cli migrate deploy && python -m scripts.seed && uvicorn main:app --host 0.0.0.0 --port 8000"]

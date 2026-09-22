@@ -4,10 +4,8 @@
 !main.py
 !prisma
 !src
-!job_qa_service
 !scripts
 !Merged_Occupations.xlsx
 
 **/__pycache__
 **/*.pyc
-**/.pytest_cache

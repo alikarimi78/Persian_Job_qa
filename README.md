@@ -11,7 +11,7 @@ Two halves, with no import between them in either direction:
 | `main.py` | the entry point — `uvicorn main:app` |
 | `src/` | FastAPI: auth, the organization → user hierarchy, job moderation, `/search` |
 | `prisma/` | `schema.prisma` (every table) and the migrations generated from it |
-| `job_qa_service/` | the RAG engine: retrieval (bge-m3 + BM25), intent detection, answer generation |
+| `src/ai_engine/` | the RAG engine: retrieval (bge-m3 + BM25), intent detection, answer generation |
 
 Everything the user reads is Persian; the dataset is ten columns per record (`job_title`,
 `aliases`, `tools`, `skills`, `knowledge`, `abilities`, `work_context`,
@@ -20,7 +20,7 @@ Everything the user reads is Persian; the dataset is ten columns per record (`jo
 ## Configuration
 
 All settings come from the **real process environment** — see `.env.example` for the
-full list. A `.env` file is deliberately not loaded: `job_qa_service/config.py` reads
+full list. A `.env` file is deliberately not loaded: `src/ai_engine/config.py` reads
 `os.environ` at import time and would never see one, so a file that satisfied the web
 layer alone would start an API whose engine has no API key. In deployment, compose's
 `env_file` puts the variables in the environment.
@@ -49,7 +49,7 @@ uvicorn.
 ```bash
 cp .env.example .env           # fill it in; the API will not start without the secrets
 docker compose up -d --build
-docker compose exec api python -m scripts.seed_from_xlsx Merged_Occupations.xlsx
+docker compose exec api python -m scripts.seed
 docker compose restart api     # the engine loads the seeded corpus at startup
 ```
 
@@ -64,37 +64,13 @@ always as `python3 -m <tool>` — the console scripts in `venv/bin` carry a stal
 venv/bin/python3 -m scripts.prisma_cli generate                 # after editing schema.prisma
 venv/bin/python3 -m scripts.prisma_cli migrate deploy           # apply migrations
 venv/bin/python3 -m uvicorn main:app --reload --port 8000       # Swagger at /docs
-venv/bin/python3 -m scripts.seed_from_xlsx Merged_Occupations.xlsx
-OCCUPATIONS_PATH=Merged_Occupations.xlsx venv/bin/python3 -m job_qa_service  # engine REPL
+venv/bin/python3 -m scripts.seed                                # first run only
+OCCUPATIONS_PATH=Merged_Occupations.xlsx venv/bin/python3 -m src.ai_engine  # engine REPL
 ```
 
 `prisma generate` writes the client **into the installed `prisma` package**, so it has to
 be re-run after a fresh `pip install` as well as after a schema change — `from prisma
 import Prisma` will not resolve otherwise.
-
-## Tests
-
-```bash
-venv/bin/python3 -m pip install -r requirements-dev.txt
-venv/bin/python3 -m pytest
-```
-
-`tests/` covers what is worth being sure of: the scope and permission rules
-(`test_account_scope.py`, `test_accounts_api.py`, `test_tenancy_api.py`), what a token
-does and does not prove (`test_auth.py`), the settings that must crash rather than
-default (`test_config.py`), the two rate limits (`test_rate_limit.py`), and what the PDF
-report puts on a page (`test_reports_api.py`).
-
-**It needs a Postgres.** The Prisma client is generated against the provider named in
-`schema.prisma`, so the in-memory SQLite the SQLAlchemy suite used is not available — and
-the trade is a fair one, because `ck_users_scope` and the two partial unique indexes are
-now the real Postgres objects rather than a SQLite imitation of them. `conftest.py`
-derives a `<database>_test` name from `DATABASE_URL`, runs `migrate deploy` against it
-once (creating it if it does not exist) and truncates between tests; **the name must end
-in `_test`** or the suite refuses to start. Point it elsewhere with `TEST_DATABASE_URL`.
-The engine is still stubbed away, so torch is never imported — but the report tests do
-need WeasyPrint's `libpango`, the same system libraries the image installs. The engine
-itself has no automated tests; the REPL above is how retrieval is exercised.
 
 ## Architecture
 
@@ -132,13 +108,14 @@ be deleted once it holds no accounts — the API answers 409 saying what is in t
 rather than cascading.
 
 **Passwords** must be at least 8 characters and carry an uppercase letter, a lowercase
-letter and a special character (`schemas._validate_password_strength`); the same rule is
+letter and a special character (`src/validators.py`); the same rule is
 repeated in the client's forms so a weak one is refused next to the box it was typed in.
 
-**Moderation is super-admin-only**, including for an org_admin: users submit
-complete records to `POST /jobs/suggestions` as `pending`, and approving one writes into
-the single corpus every organization searches, which is not an organization-level
-decision.
+**Moderation follows the owner.** Users submit complete records to
+`POST /jobs/suggestions` as `pending`; a super_admin reviews any of them, an org_admin
+only those belonging to their own organization, and **the public corpus every
+organization searches is the super admin's alone**. Approving, adding a record directly,
+editing an approved one or deleting it each start an engine rebuild.
 
 **Rate limiting** (`src/rate_limit.py`) is a sliding window kept in this process — no
 Redis, and the state is per worker. `/auth/login` is limited per source *and* username,
@@ -151,7 +128,7 @@ shares one login budget. The header's *last* entry is the one used, since nginx 
 the address it saw to whatever the caller claimed.
 
 **PDF reports.** `POST /reports/search` turns an answer into an A4 Persian report
-(`src/reports/`): the question, the generated prose, and every column of the matched
+(`src/routers/reports/`): the question, the generated prose, and every column of the matched
 record. The client posts back the result it is already showing rather than naming a
 question to re-run — that saves a second LLM call and guarantees the PDF matches the
 page it came from. Nothing is stored. Rendering is WeasyPrint, so the image needs
@@ -169,6 +146,9 @@ columns a second time — a column added here has to reach it too.
 | POST | /auth/login | public (rate limited) | JWT auth |
 | GET | /auth/me | logged-in | role + organization of the caller |
 | POST | /search | logged-in (rate limited) | ask a question |
+| POST | /search/advanced | logged-in | rank the corpus against a profile of what the caller can do |
+| GET | /search/vocabulary | logged-in | the phrases records use per profile field |
+| GET · POST · DELETE | /saved, /saved/{id} | logged-in | the caller's own starred analyses |
 | POST | /reports/search | logged-in | print that answer as a PDF report |
 | POST | /jobs/suggestions | logged-in | suggest a full record (pending) |
 | GET | /jobs/suggestions/mine | logged-in | my suggestions + statuses |
@@ -179,13 +159,18 @@ columns a second time — a column added here has to reach it too.
 | GET | /accounts | super_admin · org_admin | accounts in the caller's scope |
 | POST | /accounts/{id}/block · /unblock | any admin, downwards | refuse / restore login |
 | POST | /accounts/{id}/password | any admin, downwards | set a new password |
+| POST | /accounts/{id}/name | any admin, downwards | correct the person's name |
 | POST | /accounts/{id}/organization | super_admin | move the account to another organization |
+| POST | /auth/password · /auth/name | logged-in | change one's own password (asks for the current one) or name |
 | DELETE | /accounts/{id} | any admin, downwards | delete it (its suggestions remain) |
-| GET | /admin/suggestions | super_admin | list pending records |
-| POST | /admin/suggestions/{id}/approve · /reject | super_admin | review |
-| POST | /admin/jobs | super_admin | add a record directly (approved) |
+| GET | /admin/suggestions | super_admin · org_admin | the review queue in the caller's scope |
+| PUT | /admin/suggestions/{id} | super_admin · org_admin | correct a pending record before deciding |
+| POST | /admin/suggestions/{id}/approve · /reject | super_admin · org_admin | review |
+| GET · POST | /admin/jobs | super_admin · org_admin | the approved corpus, paged and searched · add one directly |
+| PUT · DELETE | /admin/jobs/{id} | super_admin · org_admin | edit or delete an approved record |
 | POST | /admin/rebuild | super_admin | rebuild the engine in the background |
-| GET | /admin/rebuild/status | super_admin | rebuild progress / result |
+| GET | /admin/rebuild/status | super_admin · org_admin | rebuild progress / result |
+| GET | /stats | super_admin · org_admin | dashboard figures, scoped and filterable by organization |
 | GET | /health | public | liveness + `engine_ready` |
 
 ## Migrations

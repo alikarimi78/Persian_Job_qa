@@ -65,7 +65,7 @@ def assert_can_admit_job(actor: User, organization_id: int | None) -> None:
 
 
 # The organizations whose records this account may search: None is "every one of them",
-# and the set's own `None` is the public corpus. `job_qa_service` maps the set onto its
+# and the set's own `None` is the public corpus. `src.ai_engine` maps the set onto its
 # records; nothing here knows how it stores them.
 def visible_job_organizations(actor: User) -> set[int | None] | None:
     if actor.role == Role.super_admin:

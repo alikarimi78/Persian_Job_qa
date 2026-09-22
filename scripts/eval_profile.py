@@ -3,10 +3,10 @@ import random
 import sys
 import time
 
-from job_qa_service import JobQAEngine, normalize_text
-from job_qa_service import profile as profile_match
-from job_qa_service.columns import PROFILE_REQUIRED
-from job_qa_service.config import OCCUPATIONS_PATH
+from src.ai_engine import JobQAEngine, normalize_text
+from src.ai_engine import profile as profile_match
+from src.ai_engine.columns import PROFILE_REQUIRED
+from src.ai_engine.config import OCCUPATIONS_PATH
 
 # What a record-derived probe takes from the record it is built from, in two shapes. The taxonomy
 # one is the hard measurement and the reason this script exists: those four columns are closed

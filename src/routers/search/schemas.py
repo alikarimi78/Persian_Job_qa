@@ -2,9 +2,9 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
-# The searchable profile columns, a copy of `job_qa_service.columns.PROFILE_FIELDS`. The
-# copy exists because `tests/conftest.py` stubs the engine away, so this module cannot
-# import it; the frontend's `search/AdvancedSearch.jsx:FIELDS` is the third copy.
+# The searchable profile columns, a copy of `src.ai_engine.columns.PROFILE_FIELDS`. The copy exists so
+# that validating a request never imports the engine — and torch with it — into the web layer; the
+# frontend's `search/AdvancedSearch.jsx:FIELDS` is the third copy.
 PROFILE_FIELDS = ["skills", "knowledge", "abilities", "responsibilities",
                   "work_context", "career_path_next", "tools"]
 # What a profile must carry, and how many items each field needs. `skills` is the spine of
