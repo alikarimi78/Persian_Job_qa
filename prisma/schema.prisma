@@ -53,10 +53,15 @@ model User {
   role            Role    @default(user)
   is_active       Boolean @default(true)
   organization_id Int?
-  created_at      DateTime @default(now()) @db.Timestamp(6)
+  created_at      DateTime  @default(now()) @db.Timestamp(6)
+  updated_at      DateTime  @default(now()) @updatedAt @db.Timestamp(6)
+  last_login      DateTime? @db.Timestamp(6)
+  created_by      Int?
 
   organization Organization? @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator      User?         @relation("created_by", fields: [created_by], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
+  created_accounts User[]    @relation("created_by")
   suggested_jobs JobRecord[] @relation("suggested_by")
   reviewed_jobs  JobRecord[] @relation("reviewed_by")
   saved_searches SavedSearch[]

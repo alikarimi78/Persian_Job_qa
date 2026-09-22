@@ -8,8 +8,8 @@ from src.permissions import assert_can_manage_account, assert_manages_organizati
 from src.security import require_roles, require_super_admin
 from src.routers.orgs.service import get_organization
 
-from .schemas import (AccountIn, MoveOrganizationIn, NameIn, OrgAdminIn, PasswordResetIn,
-                      UserAccountIn, UserOut)
+from .schemas import (AccountIn, AccountOut, MoveOrganizationIn, NameIn, OrgAdminIn,
+                      PasswordResetIn, UserAccountIn, UserOut)
 from .service import (create_account, delete_account, get_account,
                       move_to_organization, set_active, set_name, set_password,
                       visible_users)
@@ -17,21 +17,22 @@ from .service import (create_account, delete_account, get_account,
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
 
-@router.post("/super-admins", response_model=UserOut, status_code=201,
-             dependencies=[Depends(require_super_admin)])
-def create_super_admin(body: AccountIn, db: Prisma = Depends(get_db)):
+@router.post("/super-admins", response_model=UserOut, status_code=201)
+def create_super_admin(body: AccountIn, actor: User = Depends(require_super_admin),
+                       db: Prisma = Depends(get_db)):
     return create_account(db, username=body.username, password=body.password,
                           first_name=body.first_name, last_name=body.last_name,
-                          role=Role.super_admin)
+                          role=Role.super_admin, created_by=actor.id)
 
 
-@router.post("/org-admins", response_model=UserOut, status_code=201,
-             dependencies=[Depends(require_super_admin)])
-def create_org_admin(body: OrgAdminIn, db: Prisma = Depends(get_db)):
+@router.post("/org-admins", response_model=UserOut, status_code=201)
+def create_org_admin(body: OrgAdminIn, actor: User = Depends(require_super_admin),
+                     db: Prisma = Depends(get_db)):
     get_organization(db, body.organization_id)
     return create_account(db, username=body.username, password=body.password,
                           first_name=body.first_name, last_name=body.last_name,
-                          role=Role.org_admin, organization_id=body.organization_id)
+                          role=Role.org_admin, organization_id=body.organization_id,
+                          created_by=actor.id)
 
 
 # A super_admin may act at any level but must name the target organization explicitly.
@@ -52,7 +53,7 @@ def create_user(body: UserAccountIn,
     assert_manages_organization(actor, organization_id)
     return create_account(db, username=body.username, password=body.password,
                           first_name=body.first_name, last_name=body.last_name,
-                          role=Role.user, organization_id=organization_id)
+                          role=Role.user, organization_id=organization_id, created_by=actor.id)
 
 
 _any_admin = require_roles(Role.super_admin, Role.org_admin)
@@ -110,7 +111,7 @@ def delete_account_endpoint(user_id: int, actor: User = Depends(_any_admin),
     delete_account(db, target)
 
 
-@router.get("", response_model=list[UserOut])
+@router.get("", response_model=list[AccountOut])
 def list_accounts(role: Role | None = None, organization_id: int | None = None,
                   actor: User = Depends(_any_admin), db: Prisma = Depends(get_db)):
     filters: list[UserWhereInput] = []
@@ -119,4 +120,4 @@ def list_accounts(role: Role | None = None, organization_id: int | None = None,
     if organization_id is not None:
         filters.append({"organization_id": organization_id})
     where: UserWhereInput | None = {"AND": filters} if filters else None
-    return visible_users(db, actor, where, order="username")
+    return visible_users(db, actor, where, order="username", include={"creator": True})

@@ -6,7 +6,7 @@ from src.models import User
 from src.rate_limit import login_key, login_limiter
 from src.security import create_token, get_current_user, verify_password
 from src.routers.accounts.schemas import NameIn, UserOut
-from src.routers.accounts.service import organization_of, set_name, set_password
+from src.routers.accounts.service import organization_of, record_login, set_name, set_password
 
 from .schemas import LoginIn, MeOut, SelfPasswordIn, TokenOut
 
@@ -25,6 +25,7 @@ def login(body: LoginIn, request: Request, db: Prisma = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Account is blocked")
     login_limiter.reset(key)
+    record_login(db, user)
     return TokenOut(access_token=create_token(user), role=user.role)
 
 
@@ -51,5 +52,6 @@ def change_own_name(body: NameIn, user: User = Depends(get_current_user),
 def me(user: User = Depends(get_current_user), db: Prisma = Depends(get_db)):
     return MeOut(id=user.id, username=user.username, role=user.role,
                  first_name=user.first_name, last_name=user.last_name,
-                 organization_id=user.organization_id,
+                 organization_id=user.organization_id, created_at=user.created_at,
+                 updated_at=user.updated_at, last_login=user.last_login,
                  organization=organization_of(db, user))

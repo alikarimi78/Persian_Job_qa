@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from src.models import join_name
@@ -48,17 +50,28 @@ class PasswordResetIn(BaseModel):
         return validate_password_strength(value)
 
 
-class UserOut(BaseModel):
+class AccountRef(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     username: str
     first_name: str | None = None
     last_name: str | None = None
-    role: str
-    is_active: bool = True
-    organization_id: int | None = None
 
     @computed_field
     @property
     def full_name(self) -> str | None:
         return join_name(self.first_name, self.last_name)
+
+
+class UserOut(AccountRef):
+    role: str
+    is_active: bool = True
+    organization_id: int | None = None
+    created_at: datetime
+    updated_at: datetime
+    last_login: datetime | None = None
+
+
+# The listing alone loads the creator; a mutation's answer carries the timestamps without it.
+class AccountOut(UserOut):
+    creator: AccountRef | None = None

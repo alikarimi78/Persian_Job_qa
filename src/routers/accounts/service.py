@@ -1,6 +1,6 @@
 from fastapi import HTTPException, status
 from prisma import Prisma
-from prisma.types import UserWhereInput
+from prisma.types import UserInclude, UserWhereInput
 
 from src.models import OrganizationSummary, Role, User, scope_organization_id
 from src.permissions import visible_scope
@@ -57,7 +57,7 @@ def set_name(db: Prisma, target: User, first_name: str, last_name: str) -> User:
 
 def create_account(db: Prisma, *, username: str, password: str, role: Role,
                    first_name: str | None = None, last_name: str | None = None,
-                   organization_id: int | None = None) -> User:
+                   organization_id: int | None = None, created_by: int | None = None) -> User:
     if db.user.find_first(where={"username": username}):
         raise HTTPException(status.HTTP_409_CONFLICT, "Username already taken")
 
@@ -75,14 +75,22 @@ def create_account(db: Prisma, *, username: str, password: str, role: Role,
         "first_name": first_name,
         "last_name": last_name,
         "organization_id": organization_id,
+        "created_by": created_by,
     })
+
+
+# Raw, because a login is not an edit: any client update moves `@updatedAt`, and passing the stored value
+# back would undo an admin's edit made during the password check.
+def record_login(db: Prisma, user: User) -> None:
+    db.execute_raw("""UPDATE "users" SET "last_login" = NOW() AT TIME ZONE 'UTC' WHERE "id" = $1""",
+                   user.id)
 
 
 # `GET /stats` counts what this returns, so it can never total what its caller could
 # not have listed.
 def visible_users(db: Prisma, actor: User, where: UserWhereInput | None = None,
-                  order: str | None = None) -> list[User]:
+                  order: str | None = None, include: UserInclude | None = None) -> list[User]:
     scope = visible_scope(actor)
     clause: UserWhereInput = scope if where is None else {"AND": [scope, where]}
-    return db.user.find_many(where=clause,
+    return db.user.find_many(where=clause, include=include,
                              order={"username": "asc"} if order == "username" else None)
