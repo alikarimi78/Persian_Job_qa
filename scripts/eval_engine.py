@@ -47,8 +47,7 @@ def answered_titles(res):
 
 def brief(res):
     got = "، ".join(answered_titles(res)) or "—"
-    score = res.get("score")
-    return f"mode={res['mode']} score={'—' if score is None else f'{score:.3f}'} -> {got}"
+    return f"mode={res['mode']} -> {got}"
 
 
 def run(engine, sample_idx, fixture_rows):

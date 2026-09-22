@@ -236,7 +236,7 @@ class FakeEngine:
     def answer(self, question: str, scope=None) -> dict:
         self.calls += 1
         return {"mode": "single", "intent": "description", "answer": "پاسخ آزمایشی",
-                "job": "افسران توپخانه و موشک", "score": 0.9}
+                "job": "افسران توپخانه و موشک"}
 
 
 @pytest.fixture

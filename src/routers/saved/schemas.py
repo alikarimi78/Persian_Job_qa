@@ -33,8 +33,6 @@ class SavedResultIn(BaseModel):
     answer: SavedText
     job: SavedLabel | None = None
     jobs: list[SavedLabel] | None = Field(default=None, max_length=8)
-    score: float | None = None
-    scores: list[float] | None = Field(default=None, max_length=8)
     details: list[SavedDetailIn] | None = Field(default=None, max_length=4)
     related_jobs: list[SavedLabel] | None = Field(default=None, max_length=20)
     nearest: SavedDetailIn | None = None

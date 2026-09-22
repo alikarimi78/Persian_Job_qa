@@ -5,7 +5,6 @@ RESULT = {
     "intent": "description",
     "answer": "پرستار بخش ویژه از بیماران بدحال مراقبت می‌کند.",
     "job": "پرستاران بخش ویژه",
-    "score": 0.82,
     "details": [{
         "job_title": "پرستاران بخش ویژه",
         "fields": [

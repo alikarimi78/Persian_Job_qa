@@ -15,7 +15,7 @@ class FakeEngine:
     def answer(self, question, scope=None):
         self.scopes.append(scope)
         return {"mode": "single", "intent": "description", "answer": "پاسخ آزمایشی",
-                "job": "افسران توپخانه و موشک", "score": 0.9}
+                "job": "افسران توپخانه و موشک"}
 
     def analyze(self, profile, scope=None):
         self.profiles.append(profile)
@@ -23,7 +23,7 @@ class FakeEngine:
         return {
             "mode": "profile_match", "intent": "profile",
             "answer": "تحلیل آزمایشی",
-            "job": "خدمه پدافند ضدزره", "score": 0.61,
+            "job": "خدمه پدافند ضدزره",
             "matches": [{
                 "job_title": "خدمه پدافند ضدزره",
                 "score": 0.61, "dense": 0.73, "coverage": 0.5,
@@ -88,7 +88,8 @@ def test_every_match_carries_the_breakdown_and_the_record(world, engine, client)
     assert match["fields"][0]["matched"] == ["هدف‌گیری"]
     assert match["fields"][0]["missing"] == ["رانندگی"]
     assert match["detail"]["job_title"] == "خدمه پدافند ضدزره"
-    assert match["dense"] != match["coverage"]
+    assert match["coverage"] == 0.5
+    assert "score" not in match and "dense" not in match
 
 
 def test_the_engine_is_handed_the_cleaned_profile(world, engine, client):

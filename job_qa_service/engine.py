@@ -54,7 +54,7 @@ log = logging.getLogger("job_qa_service")
 # An organization whose accounts can reach no record at all — every row private to
 # somebody else. Nothing to retrieve, so nothing to answer from.
 def _nothing_in_reach(intent):
-    return {"mode": "out_of_domain", "intent": intent, "score": 0.0, "answer": OOD_MESSAGE}
+    return {"mode": "out_of_domain", "intent": intent, "answer": OOD_MESSAGE}
 
 
 # A cosine that never leaves the middle of its range, read onto 0..1 — see PROFILE_DENSE_FLOOR.
@@ -318,7 +318,7 @@ class JobQAEngine:
                 ia = ka
             elif b_held and self._unrelated(ia, kb):
                 ib = kb
-        return ia, float(da[ia]), ib, float(db[ib])
+        return ia, ib
 
     def _unrelated(self, a, b):
         return a != b and float(self.emb_full[a] @ self.emb_full[b]) < PAIR_SIM_MAX
@@ -330,7 +330,7 @@ class JobQAEngine:
     # job in `draft_job`; `not_a_job`; `too_vague`; `unavailable`). The tie fallback composes
     # nothing, having no reading to compose with.
     def _combined(self, question, intent, fields, pair, use_llm, mask=None, compose=False):
-        ia, s_a, ib, s_b = pair
+        ia, ib = pair
         row1, row2 = self.df.iloc[ia], self.df.iloc[ib]
         with ThreadPoolExecutor(max_workers=1) as pool:
             composing = (pool.submit(self._resolve_job, question, [ia, ib], mask)
@@ -346,7 +346,7 @@ class JobQAEngine:
             ans = template_two(row1, row2, fields)
         out = {"mode": "interdisciplinary", "intent": intent,
                "jobs": [row1["job_title"], row2["job_title"]],
-               "scores": [s_a, s_b], "answer": ans,
+               "answer": ans,
                "details": [job_detail(row1, fields, picks1),
                            job_detail(row2, fields, picks2)]}
         if composing is None:
@@ -370,12 +370,12 @@ class JobQAEngine:
         s1_dense, s1_sparse = float(dense[i1]), float(sparse[i1])
         related = self._related_titles(order)
         refusal = {"mode": "out_of_domain", "intent": "job_request",
-                   "score": s1_dense, "related_jobs": related,
+                   "related_jobs": related,
                    "nearest": self._nearest_detail(order, DISCOVERY_PRIMARY)}
 
         if s1_dense < DISCOVERY_FLOOR and s1_sparse < THRESHOLD_SPARSE:
             return {"mode": "out_of_domain", "intent": "job_request",
-                    "score": s1_dense, "answer": OOD_MESSAGE}
+                    "answer": OOD_MESSAGE}
 
         resolved = (self._resolve_job(question, order[:DISCOVERY_CANDIDATES], mask)
                     if use_llm else None)
@@ -401,15 +401,13 @@ class JobQAEngine:
             if not ans:
                 ans = template_one(row, DISCOVERY_FIELDS)
             return {"mode": "job_match", "intent": "job_request",
-                    "job": row["job_title"], "score": float(dense[resolved]),
-                    "organization_id": self._owner(resolved),
+                    "job": row["job_title"], "organization_id": self._owner(resolved),
                     "related_jobs": self._related_titles(order, resolved), "answer": ans,
                     "nearest": self._nearest_detail(order, DISCOVERY_PRIMARY, resolved),
                     "details": [job_detail(row, DISCOVERY_PRIMARY, picks)]}
 
         return {"mode": "job_generated", "intent": "job_request",
-                "job": resolved["job_title"], "score": s1_dense,
-                "job_draft": resolved, "related_jobs": related,
+                "job": resolved["job_title"], "job_draft": resolved, "related_jobs": related,
                 "nearest": self._nearest_detail(order, DISCOVERY_PRIMARY),
                 "answer": render_draft(resolved),
                 "details": [job_detail(resolved, DISCOVERY_PRIMARY)]}
@@ -492,15 +490,14 @@ class JobQAEngine:
         known = sum(len(f["matched"]) + len(f["missing"]) for f in best[3])
         typed = known + sum(len(f["unknown"]) for f in best[3])
         if known < PROFILE_KNOWN_MIN * typed or (best[2] <= 0 and best[1] < PROFILE_DENSE_ONLY):
-            return {"mode": "out_of_domain", "intent": "profile", "score": best[1],
-                    "answer": PROFILE_NONE, "matches": []}
+            return {"mode": "out_of_domain", "intent": "profile", "answer": PROFILE_NONE,
+                    "matches": []}
 
         primary = list(prof.keys())
         matches = []
-        for score, dense_score, ratio, fields, idx in ranked[:PROFILE_TOP_N]:
+        for _, _, ratio, fields, idx in ranked[:PROFILE_TOP_N]:
             row = self.df.iloc[idx]
-            matches.append({"job_title": row["job_title"], "score": score,
-                            "dense": dense_score, "coverage": ratio, "fields": fields,
+            matches.append({"job_title": row["job_title"], "coverage": ratio, "fields": fields,
                             "detail": job_detail(row, primary)})
 
         ans = self.llm([
@@ -511,8 +508,7 @@ class JobQAEngine:
             ans = template_profile(matches)
 
         return {"mode": "profile_match", "intent": "profile", "answer": ans,
-                "job": matches[0]["job_title"], "score": matches[0]["score"],
-                "matches": matches}
+                "job": matches[0]["job_title"], "matches": matches}
 
     # Each vocabulary field's phrases across the records this caller may see, most common first —
     # what advanced analysis offers while typing, so a person picks «سخن گفتن» rather than describing
@@ -575,7 +571,7 @@ class JobQAEngine:
 
         if s1_dense < THRESHOLD_MATCH and s1_sparse < THRESHOLD_SPARSE:
             return {"mode": "out_of_domain", "intent": intent,
-                    "score": s1_dense, "answer": OOD_MESSAGE}
+                    "answer": OOD_MESSAGE}
 
         i2 = next((c for c in order[1:SCAN_DEPTH + 1]
                    if float(self.emb_full[i1] @ self.emb_full[c]) < PAIR_SIM_MAX), None)
@@ -594,12 +590,12 @@ class JobQAEngine:
                     if use_llm else None)
 
         if resolved is NOT_A_JOB:
-            return {"mode": "out_of_domain", "intent": intent, "score": s1_dense,
+            return {"mode": "out_of_domain", "intent": intent,
                     "related_jobs": self._related_titles(order),
                     "nearest": self._nearest_detail(order, fields), "answer": OOD_MESSAGE}
 
         if resolved is TOO_VAGUE:
-            return {"mode": "needs_detail", "intent": intent, "score": s1_dense,
+            return {"mode": "needs_detail", "intent": intent,
                     "related_jobs": self._related_titles(order),
                     "nearest": self._nearest_detail(order, fields),
                     "answer": DISCOVERY_VAGUE}
@@ -611,7 +607,7 @@ class JobQAEngine:
             # The composed record rides along as `job_draft` too, so the client can offer it
             # for filing — the boxes answer the question, the draft is what gets submitted.
             return {"mode": "job_adapted", "intent": intent,
-                    "job": resolved["job_title"], "score": s1_dense, "answer": ans,
+                    "job": resolved["job_title"], "answer": ans,
                     "related_jobs": self._related_titles(order),
                     "nearest": self._nearest_detail(order, fields),
                     "details": [job_detail(resolved, fields)], "job_draft": resolved}
@@ -625,8 +621,7 @@ class JobQAEngine:
         # therefore `eval_engine` it leaves exactly as it was.
         if (resolved is None and i2 is not None and s2_dense >= SECONDARY_MIN
                 and abs(s1_dense - s2_dense) <= SECONDARY_MARGIN):
-            return self._combined(question, intent, fields, (i1, s1_dense, i2, s2_dense),
-                                  use_llm)
+            return self._combined(question, intent, fields, (i1, i2), use_llm)
 
         if isinstance(resolved, int):
             i1, s1_dense = resolved, float(dense[resolved])
@@ -640,7 +635,7 @@ class JobQAEngine:
         if not ans:
             ans = template_one(row1, fields)
         return {"mode": "single", "intent": intent, "job": row1["job_title"],
-                "score": s1_dense, "answer": ans,
+                "answer": ans,
                 "organization_id": self._owner(i1),
                 "related_jobs": self._related_titles(order, i1),
                 "nearest": self._nearest_detail(order, fields, i1),

@@ -34,7 +34,7 @@ def ask(client, monkeypatch, user, result):
 
 
 STORED = {"intent": "responsibilities", "answer": "پاسخ آزمایشی",
-          "job": "افسران توپخانه و موشک", "score": 0.9}
+          "job": "افسران توپخانه و موشک"}
 
 
 @pytest.mark.parametrize("mode", ["single", "job_match"])
@@ -50,6 +50,13 @@ def test_a_public_answer_carries_no_organization(world, client, monkeypatch, mod
     body = ask(client, monkeypatch, world.user_a1,
                {**STORED, "mode": mode, "organization_id": None}).json()
     assert body["organization_id"] is None
+
+
+# The client no longer shows a match score, so none is served even if an engine sends one.
+def test_no_match_score_is_served(world, client, monkeypatch):
+    body = ask(client, monkeypatch, world.user_a1,
+               {**STORED, "mode": "single", "score": 0.9, "scores": [0.9, 0.8]}).json()
+    assert "score" not in body and "scores" not in body
 
 
 def test_a_composed_answer_has_no_owner_field_to_misread(world, client, monkeypatch):

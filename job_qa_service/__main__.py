@@ -19,7 +19,7 @@ if __name__ == "__main__":
             continue
         print(f"\nmode: {res['mode']} | intent: {res['intent']}")
         if res["mode"] in ("single", "job_match", "job_generated"):
-            print(f"job: {res['job']} (score={res['score']:.3f})")
+            print(f"job: {res['job']}")
         elif res["mode"] == "interdisciplinary":
             print(f"jobs: {res['jobs'][0]} + {res['jobs'][1]}")
         if res.get("related_jobs"):

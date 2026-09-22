@@ -44,8 +44,6 @@ class SearchOut(BaseModel):
     answer: str
     job: str | None = None
     jobs: list[str] | None = None
-    score: float | None = None
-    scores: list[float] | None = None
     details: list[JobDetailOut] | None = None
     related_jobs: list[str] | None = None
     nearest: JobDetailOut | None = None
@@ -99,8 +97,6 @@ class ProfileFieldOut(BaseModel):
 
 class ProfileMatchOut(BaseModel):
     job_title: str
-    score: float
-    dense: float
     coverage: float
     fields: list[ProfileFieldOut] = []
     detail: JobDetailOut
@@ -111,7 +107,6 @@ class ProfileSearchOut(BaseModel):
     intent: str
     answer: str
     job: str | None = None
-    score: float | None = None
     matches: list[ProfileMatchOut] = []
 
 
