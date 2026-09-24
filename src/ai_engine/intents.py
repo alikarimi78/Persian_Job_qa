@@ -99,9 +99,6 @@ def is_job_request(question):
     return any(p.search(question) for p in _JOB_REQUEST_RE)
 
 
-# Six, not four: 628 of the 1120 stored titles run past four words, and a job name typed in
-# full — «تکنسین ایستگاه شارژ خودروی برقی» — was read as a question, composed but never
-# offered as a suggestion. Up to six words covers 97% of the corpus's 10,274 aliases.
 BARE_NAME_MAX_TOKENS = 6
 
 OCCUPATION_HEADS = (
@@ -143,11 +140,6 @@ def _forms(word):
     return (word,)
 
 
-# A definition question names its subject and asks what it is, which is what the bare name asks on its
-# own — so «ذی‌حساب چیست؟» is answered as «ذی‌حساب» is, through `_discover`, rather than meeting the
-# question path's stricter gate: it retrieved 0.495 dense and 0.0 sparse and was refused with no call
-# made, while the name alone (0.514) composed the record. The tail only counts after a bare name, so
-# «وظایف افسر توپخانه چیست؟» keeps its keyword and stays a question about one column.
 DEFINITION_TAILS = (("چیست",), ("چیه",), ("کیست",), ("کیه",), ("چی", "هست"), ("چی", "هستش"),
                     ("یعنی", "چه"), ("یعنی", "چی"), ("چه", "شغلی", "است"), ("به", "چه", "معناست"))
 
@@ -191,9 +183,6 @@ def _occupation_offset(question):
         if any(token.startswith(head) for head in OCCUPATION_HEADS):
             return found.start()
         for word in forms:
-            # The activity noun of an agentive stem names the same work the stem does:
-            # «لوله‌کشی» is «لوله‌کش» + ی, «برنامه‌نویسی» is «برنامه‌نویس» + ی. Without this
-            # the whole family — کشی، نویسی، گری، سازی، شناسی — read as not-an-occupation.
             if _is_agentive(word) or (word.endswith("ی") and _is_agentive(word[:-1])):
                 return found.start()
     return None

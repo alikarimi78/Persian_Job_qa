@@ -34,11 +34,6 @@ def _visible_organizations(db: Prisma, actor: User,
     return [org] if org is not None else []
 
 
-# Counts only, scoped the way `/accounts` is: the account totals come from
-# `visible_users`, so they can never exceed what this caller could have listed. The
-# `corpus_records`/`engine_records` gap is what a rebuild would pick up. `organization_id`
-# narrows every number to one organization — the dashboard's filter — and an org_admin
-# is narrowed to their own whether they ask or not.
 @router.get("", response_model=StatsOut)
 def stats(organization_id: int | None = None,
           actor: User = Depends(require_roles(Role.super_admin, Role.org_admin)),
@@ -53,8 +48,6 @@ def stats(organization_id: int | None = None,
 
     per_role = Counter(a.role for a in accounts)
 
-    # An organization's job activity is what its people proposed plus what belongs to
-    # it however it got there — a record the super admin added for them is theirs.
     scope_ids = {a.id for a in accounts}
     if actor.role != Role.super_admin:
         scope_ids.add(actor.id)

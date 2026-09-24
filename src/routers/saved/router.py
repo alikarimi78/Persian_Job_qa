@@ -8,8 +8,6 @@ from src.security import get_current_user
 from .schemas import SavedPage, SavedSearchDetailOut, SavedSearchIn, SavedSearchOut
 from .service import SAVED_PAGE_MAX, SAVED_PAGE_SIZE, owned, save
 
-# A reader's own stars, and nobody else's: there is no listing across accounts and no admin
-# view of one, a saved search being what somebody looked up rather than a record of the system.
 router = APIRouter(prefix="/saved", tags=["saved"],
                    dependencies=[Depends(get_current_user)])
 
@@ -20,8 +18,6 @@ def save_search(body: SavedSearchIn, actor: User = Depends(get_current_user),
     return save(db, actor, body)
 
 
-# Newest first — a star is looked up again soon after it is set. `page`/`page_size` are clamped
-# rather than validated, as the corpus listing's are: a 422 would take the panel down.
 @router.get("", response_model=SavedPage)
 def list_saved(page: int = 1, page_size: int = SAVED_PAGE_SIZE,
                actor: User = Depends(get_current_user), db: Prisma = Depends(get_db)):

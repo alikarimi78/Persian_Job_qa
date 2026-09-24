@@ -8,20 +8,12 @@ from src.ai_engine import profile as profile_match
 from src.ai_engine.columns import PROFILE_REQUIRED
 from src.ai_engine.config import OCCUPATIONS_PATH
 
-# What a record-derived probe takes from the record it is built from, in two shapes. The taxonomy
-# one is the hard measurement and the reason this script exists: those four columns are closed
-# vocabularies whose commonest items sit in nine records out of ten, so a profile drawn from them
-# describes hundreds of records equally well and only the weighting tells them apart. Adding one
-# duty gives the probe a sentence almost no other record holds, which is the easy case.
 PROBE_SHAPES = {
     "taxonomy only": {"skills": 2, "knowledge": 1, "abilities": 1, "work_context": 1},
     "with one duty": {"skills": 2, "knowledge": 1, "abilities": 1, "work_context": 1,
                       "responsibilities": 1},
 }
 
-# Profiles written the way a person writes them, against the title their answer must contain. These
-# are the case the coverage channel exists for and the one it used to score 0% on: none of these
-# phrases is in any taxonomy column, and every one of them is somewhere in the right record.
 NATURAL_PROBES = [
     ({"skills": ["برنامه‌نویسی", "حل مسئله"], "knowledge": ["پایگاه داده"],
       "abilities": ["تفکر منطقی"], "work_context": ["کار تیمی"],
@@ -52,9 +44,6 @@ NATURAL_PROBES = [
       "abilities": ["مهارت دست"], "work_context": ["کار در ارتفاع"]}, "برق‌کار"),
 ]
 
-# A profile of nothing real: the ranking has nothing to stand on and must refuse rather than hand
-# back five jobs at 0%. Fortune-telling is deliberately not one of these — «رمال» and «فالگیر» are
-# corpus records, and a profile of divination is answered, not refused.
 FANTASY_PROBES = [
     {"skills": ["تربیت اژدها", "پرواز با جارو"], "knowledge": ["جادوی سیاه"],
      "abilities": ["نامرئی شدن"], "work_context": ["قلعه جادویی"]},
@@ -69,7 +58,6 @@ def build_probe(row, rng, shape):
         items = profile_match.record_items(field, row.get(field, ""))
         if items:
             profile[field] = rng.sample(items, min(count, len(items)))
-    # A record too thin to meet the form's own minimums is not a probe.
     if any(len(profile.get(field, [])) < 1 for field in PROFILE_REQUIRED):
         return None
     if len(profile.get("skills", [])) < 2:
@@ -109,7 +97,6 @@ def main():
         first = top5 = derived = covered = 0
         for idx in sample:
             row = engine.df.iloc[idx]
-            # The same seed per record, so the two shapes draw the same items where they overlap.
             profile = build_probe(row, random.Random(args.seed + idx), shape)
             if profile is None:
                 continue

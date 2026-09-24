@@ -4,40 +4,14 @@ pydantic-settings>=2.2
 PyJWT>=2.8
 bcrypt==5.0.0
 
-# The database layer, in place of sqlalchemy + psycopg2-binary + alembic. `prisma` is
-# the whole of it: the client, the migration tool and the schema language, generated
-# from `prisma/schema.prisma`. There is no separate driver — the query engine is a
-# binary the package fetches and talks to over a local socket.
-#
-# Pinned exactly, because the version decides the *generated code*: `prisma generate`
-# writes into the installed package, so an upgrade rewrites the client the application
-# imports. Bump it deliberately and re-check the engine eval and the endpoints.
-#
-# It needs Node at **generate** time (the schema parser and migration engine are the
-# upstream Prisma CLI), which is why the Dockerfile installs one. Nothing needs Node at
-# runtime.
 prisma==0.15.0
 
-# PDF reports (src/routers/reports). WeasyPrint needs libpango/libcairo from the OS — the
-# Dockerfile installs them; jinja2 is only ever a transitive dependency of torch here,
-# so the template engine is named explicitly rather than relied on to be there.
 weasyprint>=62
 jinja2>=3.1
 
-# RAG engine
 numpy==1.24.3
 pandas>=2.0
 openpyxl>=3.1
-# Pinned, and the pin is about the *tokenizer*, not the API. bge-m3's vectors depend
-# on how the text is tokenized, and tokenizers 0.22 maps ZWNJ (U+200C) to <unk> while
-# 0.23 absorbs it: «مهندس نقشه‌بردار» is [.. 88512, 3, 3979, 4914] under one and
-# [.. 88512, 150599] under the other. Persian is full of ZWNJ — hazm's normalizer
-# *inserts* it — so the two versions embed this corpus into two different spaces, and
-# a vector built under one scores ~0.09 lower against a query encoded under the other.
-# The embedding store keys on EMBED_MODEL_NAME + text and knows nothing about library
-# versions, so an unpinned bump would silently mix both spaces in one file and quietly
-# invalidate every threshold in src.ai_engine/config.py. Moving these pins means
-# `POST /admin/rebuild?force_embeddings=true`, exactly as changing EMBED_MODEL_NAME does.
 sentence-transformers==6.0.0
 transformers==5.16.1
 tokenizers==0.23.1
@@ -45,8 +19,5 @@ torch>=2.6,<2.8
 openai>=1.30
 hazm>=0.10
 
-# Imported directly rather than leant on as somebody else's transitive dependency:
-# fontTools subsets the shipped Vazirmatn in `routers/reports/render.py`, and pydantic
-# is the settings and schema layer throughout `src/`.
 fonttools==4.63.0
 pydantic==2.13.4

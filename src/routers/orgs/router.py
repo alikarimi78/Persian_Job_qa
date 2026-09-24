@@ -41,8 +41,6 @@ def get_one(organization_id: int,
     return with_job_counts(db, [org])[0]
 
 
-# The blob is kept out of every read but this one, which is why the list model is the
-# `OrganizationSummary` partial.
 @router.get("/{organization_id}/logo", response_model=OrganizationLogoOut)
 def get_logo(organization_id: int,
              actor: User = Depends(require_roles(Role.super_admin, Role.org_admin)),
@@ -55,9 +53,6 @@ def get_logo(organization_id: int,
     return OrganizationLogoOut(logo=f"data:{org.logo_mime};base64,{org.logo}")
 
 
-# Only the fields actually sent are applied: "" clears a field, an absent one is left
-# alone, which is how the client leaves `logo` out of a PATCH that never opened the
-# picker.
 @router.patch("/{organization_id}", response_model=OrganizationOut,
               dependencies=[Depends(require_super_admin)])
 def update_organization(organization_id: int, body: OrganizationUpdateIn,
@@ -79,12 +74,6 @@ def update_organization(organization_id: int, body: OrganizationUpdateIn,
                                                  data=changes)
 
 
-# The accounts must be gone first, as they always had to be. The organization's own job
-# records go *with* it — no other organization can search them, so there is nobody to
-# hand them over to — and they are deleted here, in the organization's own transaction,
-# rather than by an `ON DELETE CASCADE` that a reader of the schema would not expect.
-# A record meant to outlive the organization is made public before the delete, through
-# `PUT /admin/jobs/{id}`.
 @router.delete("/{organization_id}", status_code=204,
                dependencies=[Depends(require_super_admin)])
 def delete_organization(organization_id: int, db: Prisma = Depends(get_db)):

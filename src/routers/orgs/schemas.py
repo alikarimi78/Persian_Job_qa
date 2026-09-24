@@ -4,8 +4,6 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validat
 
 from src.validators import blank_to_none
 
-# The logo travels as a base64 data URI, so the bound is on the encoded string; the
-# decoded byte limit that actually matters is `service.MAX_LOGO_BYTES`.
 MAX_LOGO_URI = 800_000
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
@@ -72,9 +70,6 @@ class OrganizationOut(BaseModel):
         return self.logo_mime is not None
 
 
-# The list and the single read carry one number the others do not: how many job
-# records name this organization. It is what the delete dialog warns with, those
-# records going with the organization.
 class OrganizationRow(OrganizationOut):
     job_count: int = 0
 

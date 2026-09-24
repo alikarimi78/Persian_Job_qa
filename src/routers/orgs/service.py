@@ -20,8 +20,6 @@ _DATA_URI_RE = re.compile(r"^data:(?P<mime>[\w.+-]+/[\w.+-]+);base64,(?P<payload
                           re.DOTALL)
 
 
-# The declared mime is checked against the magic bytes, and SVG is refused outright —
-# it is served back as a data URI, so an SVG here would be stored XSS.
 def decode_logo(data_uri: str) -> tuple[str, bytes]:
     match = _DATA_URI_RE.match(data_uri.strip())
     if not match:
@@ -48,8 +46,6 @@ def decode_logo(data_uri: str) -> tuple[str, bytes]:
     return mime, raw
 
 
-# The only writer of either column, which is what makes `models.has_logo` safe to read
-# off the cheap `logo_mime` instead of pulling the blob.
 def logo_columns(data_uri: str | None) -> dict[str, object]:
     if not data_uri:
         return {"logo": None, "logo_mime": None}
@@ -72,8 +68,6 @@ def get_organization(db: Prisma, organization_id: int) -> OrganizationSummary:
     return org
 
 
-# One grouped query for a whole list rather than a count per row. Records that belong
-# to no organization are the public corpus and are nobody's row here.
 def job_counts(db: Prisma, organization_ids: list[int],
                status: JobStatus | None = None) -> dict[int, int]:
     if not organization_ids:

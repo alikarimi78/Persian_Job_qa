@@ -3,10 +3,6 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field, StringConstraints
 
-# A starred search is the answer the reader saw, posted back by the client the way
-# `reports` posts one to be printed — so it is untrusted input, not a round-trip of our
-# own model, and every string is bounded. Identity is never read from the body: the row
-# belongs to the token's account.
 SavedText = Annotated[str, StringConstraints(max_length=20_000)]
 SavedLabel = Annotated[str, StringConstraints(max_length=255)]
 
@@ -25,8 +21,6 @@ class SavedDetailIn(BaseModel):
     fields: list[SavedFieldIn] = Field(default=[], max_length=40)
 
 
-# The `SearchOut` the client holds, bounded. Unknown keys are dropped rather than stored,
-# so a client one version ahead cannot fill the row with anything the reader will not see.
 class SavedResultIn(BaseModel):
     mode: SavedLabel
     intent: SavedLabel = ""
@@ -48,8 +42,6 @@ class SavedSearchIn(BaseModel):
     result: SavedResultIn
 
 
-# The listing carries what a row is recognised by; the answer itself rides only on the
-# one row a reader opens, a page of twenty answers being some 300 KB of prose.
 class SavedSearchOut(BaseModel):
     id: int
     question: str

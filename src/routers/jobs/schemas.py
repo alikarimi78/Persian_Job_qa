@@ -2,15 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# The ten content columns. Adding or renaming one here is only part of the change —
-# see CLAUDE.md for the full list of places that have to move together.
-
 
 class JobIn(BaseModel):
-    # Not one of the ten: who the record belongs to. None is the public corpus, which
-    # every organization searches; an id confines it to that organization's accounts.
-    # Absent means public, so a client that predates the column can only ever add to the
-    # shared corpus — never silently hand a record to an organization.
     organization_id: int | None = None
 
     job_title: str = Field(min_length=2, max_length=255)
@@ -33,8 +26,6 @@ class JobOut(JobIn):
     updated_at: datetime | None = None
 
 
-# A stored record is read back as it is; the min_length bounds belong to the input side
-# only, or a legacy row with an empty column could never be listed.
 for _column in JobIn.model_fields:
     JobOut.model_fields[_column].metadata = []
 JobOut.model_rebuild(force=True)

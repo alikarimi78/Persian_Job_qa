@@ -25,8 +25,6 @@ def delete_account(db: Prisma, target: User) -> None:
     db.user.delete(where={"id": target.id})
 
 
-# Moving an org_admin needs an admin-free destination — `uq_users_org_admin` would
-# refuse it anyway, but a 409 naming the sitting admin is the useful answer.
 def move_to_organization(db: Prisma, target: User, organization: OrganizationSummary) -> User:
     if target.organization_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT,
@@ -79,15 +77,11 @@ def create_account(db: Prisma, *, username: str, password: str, role: Role,
     })
 
 
-# Raw, because a login is not an edit: any client update moves `@updatedAt`, and passing the stored value
-# back would undo an admin's edit made during the password check.
 def record_login(db: Prisma, user: User) -> None:
     db.execute_raw("""UPDATE "users" SET "last_login" = NOW() AT TIME ZONE 'UTC' WHERE "id" = $1""",
                    user.id)
 
 
-# `GET /stats` counts what this returns, so it can never total what its caller could
-# not have listed.
 def visible_users(db: Prisma, actor: User, where: UserWhereInput | None = None,
                   order: str | None = None, include: UserInclude | None = None) -> list[User]:
     scope = visible_scope(actor)

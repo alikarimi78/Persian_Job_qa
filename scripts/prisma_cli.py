@@ -13,6 +13,7 @@ _NO_SCHEMA = {"version", "--version", "--help", "-h", "py"}
 
 
 def main(argv: list[str]) -> None:
+    os.environ["DATABASE_URL"] = settings.DATABASE_URL
     os.environ["PATH"] = os.pathsep.join(
         [str(Path(sys.executable).parent), os.environ.get("PATH", "")])
 

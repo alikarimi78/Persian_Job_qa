@@ -13,8 +13,6 @@ log = logging.getLogger("engine_manager")
 _COLUMNS = ["job_title", "aliases", "tools", "skills", "knowledge", "abilities",
             "work_context", "career_path_next", "description", "responsibilities"]
 
-# Not a content column and never embedded: who may search the record. NULL rides along
-# as NULL — the engine reads a missing owner as the public corpus.
 _SCOPE_COLUMN = "organization_id"
 
 

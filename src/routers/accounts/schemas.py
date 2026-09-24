@@ -72,6 +72,5 @@ class UserOut(AccountRef):
     last_login: datetime | None = None
 
 
-# The listing alone loads the creator; a mutation's answer carries the timestamps without it.
 class AccountOut(UserOut):
     creator: AccountRef | None = None

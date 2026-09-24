@@ -2,9 +2,6 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field, StringConstraints
 
-# The client posts back the `SearchOut` it already holds and nothing is stored, so this
-# is untrusted input rather than a round-trip of our own model: every string is bounded
-# and identity is never read from the body — the masthead comes from the token.
 ReportText = Annotated[str, StringConstraints(max_length=20_000)]
 ReportLabel = Annotated[str, StringConstraints(max_length=255)]
 

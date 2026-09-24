@@ -22,11 +22,6 @@ COLOPHON = "این گزارش به‌صورت خودکار از پاسخ سام�
 
 SENTENCE_LISTS = {"responsibilities"}
 
-# What the line under the question calls the job the answer is about — and, through
-# `_related`, the set of modes whose subject is dropped from the neighbour list. Both
-# `single` and `job_adapted` name the job the *user* asked about (the engine resolves
-# the question to one before answering), so both belong here; `about` and
-# `out_of_domain` carry no job at all.
 MATCHED_LABEL = {
     "single": "شغل مورد پرسش",
     "job_match": "شغل منطبق",

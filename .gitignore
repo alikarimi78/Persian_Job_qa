@@ -1,16 +1,11 @@
-# Python
 __pycache__/
 *.py[cod]
 
-# Environments and secrets
 venv/
 .env
 
-# Derived embedding cache: regenerated on demand and keyed by corpus fingerprint,
-# so a committed copy goes stale on any dataset edit. The Dockerfile never copies it.
 emb_cache/
 
-# Editors and agents
 .idea/
 .vscode/
 .claude

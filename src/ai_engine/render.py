@@ -50,9 +50,6 @@ def template_profile(matches):
     return "\n".join(lines)
 
 
-# A matched item says where it was found when that is not the column it was typed in — this is what
-# lets the answer explain that «برنامه‌نویسی» is covered by the record's duties rather than claim a
-# closed skills vocabulary holds it.
 def _located(field):
     where = field.get("found_in") or {}
     return [item + (f" ({PROFILE_ELSEWHERE_LABEL} {FIELD_LABELS.get(where[item], where[item])})"
@@ -74,8 +71,6 @@ def profile_context(profile, matches):
             if field.get("unknown"):
                 line += f" / {PROFILE_UNKNOWN_LABEL}: " + "، ".join(field["unknown"])
             lines.append(line)
-        # The record itself, not only the verdict on it: without this the model can say an item was
-        # not covered but never what the job holds instead, which is the one thing worth reading.
         if n > PROFILE_RECORD_MATCHES:
             continue
         lines.append(f"{PROFILE_RECORD_LABEL}:")
@@ -93,8 +88,6 @@ def field_items(field, value):
             if p.strip() and p.strip() not in EMPTY_CELLS]
 
 
-# A box folds only when that hides two items or more: six items show all six, since a toggle
-# that opens a single item costs the reader the click the item itself would have cost the page.
 def preview_count(n):
     return n if n <= PREVIEW_ITEMS + 1 else PREVIEW_ITEMS
 
@@ -121,7 +114,5 @@ def job_detail(row, primary_fields, order=None):
             "primary": key in primary,
             "preview": preview_count(len(items)),
         })
-    # The description always leads, whatever was asked; then the columns the answer used, then the
-    # rest. The client and the PDF both draw the boxes in exactly this order.
     fields.sort(key=lambda f: (f["key"] != "description", not f["primary"]))
     return {"job_title": str(row.get("job_title", "") or "").strip(), "fields": fields}

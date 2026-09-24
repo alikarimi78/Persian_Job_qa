@@ -12,7 +12,6 @@ COLUMNS = ["job_title", "aliases", "tools", "skills", "knowledge", "abilities",
            "work_context", "career_path_next", "description", "responsibilities"]
 
 
-# The corpus file the first run fills `jobs_info` from; the engine reads the same path.
 DEFAULT_CORPUS = OCCUPATIONS_PATH or "Merged_Occupations.xlsx"
 
 

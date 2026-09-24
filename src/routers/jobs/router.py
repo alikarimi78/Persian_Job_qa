@@ -12,9 +12,6 @@ from .schemas import JobIn, JobOut
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
-# Two options at the point of suggesting: the public corpus, or the organization the
-# suggester sits in. Which of the two it is travels in the record and is decided here —
-# a user cannot propose a record into somebody else's organization.
 @router.post("/suggestions", response_model=JobOut, status_code=201)
 def suggest_job(body: JobIn, user: User = Depends(get_current_user),
                 db: Prisma = Depends(get_db)):

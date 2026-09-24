@@ -19,10 +19,6 @@ def ready_engine():
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Engine is not ready")
 
 
-# Both paths run against the caller's own reach: the public corpus plus their own
-# organization's records, and every record for a super_admin. A record another
-# organization owns is not refused — it is not there at all, so a question about it is
-# answered the way a question about anything the corpus lacks is, by composing one.
 @router.post("/search", response_model=SearchOut)
 async def search(body: SearchIn, user: User = Depends(search_rate_limit)):
     engine = ready_engine()
@@ -39,8 +35,6 @@ async def advanced_search(body: ProfileSearchIn, user: User = Depends(search_rat
     return result
 
 
-# What advanced analysis offers while typing, read once per page rather than per keystroke, so it
-# spends nothing from the search budget. Drawn from the caller's own reach, like a search.
 @router.get("/search/vocabulary", response_model=VocabularyOut)
 async def vocabulary(user: User = Depends(get_current_user)):
     engine = ready_engine()

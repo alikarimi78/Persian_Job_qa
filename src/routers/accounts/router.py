@@ -35,7 +35,6 @@ def create_org_admin(body: OrgAdminIn, actor: User = Depends(require_super_admin
                           created_by=actor.id)
 
 
-# A super_admin may act at any level but must name the target organization explicitly.
 @router.post("/users", response_model=UserOut, status_code=201)
 def create_user(body: UserAccountIn,
                 actor: User = Depends(require_roles(Role.super_admin, Role.org_admin)),
@@ -75,8 +74,6 @@ def unblock_account(user_id: int, actor: User = Depends(_any_admin),
     return set_active(db, target, True)
 
 
-# An admin setting somebody else's password, which deliberately does not ask for the old
-# one; `POST /auth/password` is the caller changing their own against the current one.
 @router.post("/{user_id}/password", response_model=UserOut)
 def reset_password(user_id: int, body: PasswordResetIn, actor: User = Depends(_any_admin),
                    db: Prisma = Depends(get_db)):

@@ -52,13 +52,10 @@ TOO_VAGUE = object()
 log = logging.getLogger("ai_engine")
 
 
-# An organization whose accounts can reach no record at all — every row private to
-# somebody else. Nothing to retrieve, so nothing to answer from.
 def _nothing_in_reach(intent):
     return {"mode": "out_of_domain", "intent": intent, "answer": OOD_MESSAGE}
 
 
-# A cosine that never leaves the middle of its range, read onto 0..1 — see PROFILE_DENSE_FLOOR.
 def _joined(text):
     return text.replace("\u200c", "").replace(" ", "")
 
@@ -108,9 +105,6 @@ class JobQAEngine:
     def __init__(self, data, rebuild_embeddings=False):
         self.df = self._load_data(data)
         self.titles = self.df["job_title"].tolist()
-        # A title can now be held twice — once by the public corpus and once by an
-        # organization that keeps its own version — so the index maps to every record
-        # with that title and the reader takes the first one in its own reach.
         self.title_index = defaultdict(list)
         for i, title in enumerate(self.titles):
             self.title_index[normalize_text(title)].append(i)
@@ -151,10 +145,6 @@ class JobQAEngine:
                 df[col] = ""
             df[col] = df[col].map(normalize_text)
         df = df[df["job_title"].str.len() > 0].reset_index(drop=True)
-        # Nothing outside the database carries the column — the xlsx, the REPL and
-        # `eval_engine` all build a wholly public corpus. A Series either way: the bare
-        # sentinel made `pd.to_numeric` return a scalar, which has no `.fillna`, and every
-        # corpus built from anything but the database died there.
         column = (df[ORGANIZATION_COLUMN] if ORGANIZATION_COLUMN in df.columns
                   else pd.Series(PUBLIC_ORGANIZATION, index=df.index))
         df[ORGANIZATION_COLUMN] = (pd.to_numeric(column, errors="coerce")
@@ -201,12 +191,6 @@ class JobQAEngine:
         store.save()
         return emb_full, emb_title
 
-    # Which records this caller may reach: None is every one of them, and the scope's
-    # own None is the public corpus. One boolean array over the whole corpus, not a
-    # second engine — the embeddings, the encoder and the BM25 statistics are shared,
-    # and an organization's records are simply the rows a mask keeps.
-    # Who owns a stored record, as the API spells it: an organization id, or None for the
-    # public corpus rather than the column's sentinel.
     def _owner(self, i):
         owner = int(self.org_ids[i])
         return None if owner == PUBLIC_ORGANIZATION else owner
@@ -222,9 +206,6 @@ class JobQAEngine:
         dense = W_FULL * (self.emb_full @ q_emb) + W_TITLE * (self.emb_title @ q_emb)
         sparse = self.bm25.score(q_norm)
 
-        # The candidates come out of the reachable rows rather than being filtered after
-        # the fact: a top-k taken over the whole corpus and masked afterwards would hand
-        # RRF fewer and fewer candidates the narrower the scope.
         pool = np.arange(len(dense)) if mask is None else np.flatnonzero(mask)
         k = min(MAX_CANDIDATES, len(pool))
         rrf = defaultdict(float)
@@ -266,9 +247,6 @@ class JobQAEngine:
             draft[col] = re.sub(r"\s*\|\s*", "، ", draft[col]).strip("، ")
         for col, cap in DRAFT_MAX_ITEMS.items():
             draft[col] = " | ".join([i.strip() for i in draft[col].split("|") if i.strip()][:cap])
-        # The title is the user's own, and the one licensed repair is a *missing* separator. So when the
-        # model's title is the typed one with a space swallowed, the typed spelling wins — «ذی حساب»
-        # normalizes to «ذی‌حساب», never «ذیحساب» — while a ZWNJ the model added is kept.
         typed = normalize_text(question)
         title = draft["job_title"]
         if _joined(title) == _joined(typed) and _boundaries(title) < _boundaries(typed):
@@ -278,9 +256,6 @@ class JobQAEngine:
         held = self._held_title(draft["job_title"], mask)
         return draft if held is None else held
 
-    # The corpus already holding the composed title is only a duplicate if this caller
-    # could have been shown it; another organization's record of the same name is not
-    # theirs to be answered from, so for them the draft stays a draft.
     def _held_title(self, title, mask):
         for i in self.title_index.get(title, ()):
             if mask is None or mask[i]:
@@ -297,15 +272,6 @@ class JobQAEngine:
                 return job_detail(self.df.iloc[i], fields)
         return None
 
-    # A question that combines two fields names both, so each half is retrieved on its own.
-    # Retrieving only the whole question let the field that dominated it fill both slots:
-    # «مهندس کامپیوتر و پزشک» came back as two computer records and an answer admitting the
-    # medical half was missing. But the whole-question pair is sometimes the better one —
-    # «معلم و روان‌شناس» finds «روان‌شناسان مدارس», the intersection itself, which neither
-    # half finds alone — so it is kept for every half it already covers, to within
-    # PAIR_COVER_MARGIN of that half's own best record, and only a missed half is replaced.
-    # None when the question does not split into two halves leading to two different,
-    # unrelated records: «… مخلوط‌کن و ترکیب مواد» splits, but both halves find the same job.
     def _combination_pair(self, q_norm, i1, i2, mask=None):
         tokens = q_norm.split()
         at = next((n for n, tok in enumerate(tokens[1:-1], 1) if tok in ("و", "با")), None)
@@ -339,12 +305,6 @@ class JobQAEngine:
     def _unrelated(self, a, b):
         return a != b and float(self.emb_full[a] @ self.emb_full[b]) < PAIR_SIM_MAX
 
-    # One card for two records: the prose combines them, and each keeps its own boxes. An
-    # explicit combination also composes the combined job — beside the prose, not after it —
-    # so it is offered for filing in the shape every composed job is: `job_draft` with its
-    # `draft_detail`, or a `draft_reason` saying why there is none (`exists`, naming the stored
-    # job in `draft_job`; `not_a_job`; `too_vague`; `unavailable`). The tie fallback composes
-    # nothing, having no reading to compose with.
     def _combined(self, question, intent, fields, pair, use_llm, mask=None, compose=False):
         ia, ib = pair
         row1, row2 = self.df.iloc[ia], self.df.iloc[ib]
@@ -442,7 +402,6 @@ class JobQAEngine:
         columns = {}
         for field in RANKED_FIELDS:
             items = field_items(field, str(row.get(field, "") or "").strip())
-            # Only a column that folds has a "which five" to choose; one shown whole is not sent.
             if preview_count(len(items)) < len(items):
                 columns[field] = items
         if not columns:
@@ -488,10 +447,6 @@ class JobQAEngine:
             return {"mode": "out_of_domain", "intent": "profile",
                     "answer": PROFILE_NONE, "matches": []}
 
-        # One pass over everything in reach, not a shortlist: a record holding every item the
-        # person typed must not be lost because dense ranked it twentieth. The weights each item
-        # is scored with come out of that same pass, so the ranking is done in `profile.rank` and
-        # only the two channels are mixed here.
         prepared = profile_match.prepare(prof)
         measured = profile_match.rank(prepared, [self.profile_tokens[i] for i in pool])
         ranked = [(PROFILE_W_DENSE * _scaled(float(dense[idx])) + PROFILE_W_COVER * weighted,
@@ -500,9 +455,6 @@ class JobQAEngine:
         ranked.sort(key=lambda r: r[0], reverse=True)
 
         best = ranked[0]
-        # Which items the corpus has a word for at all is a property of the corpus, not of one
-        # record, so the leader's fields carry it for the whole ranking — and a profile it knows
-        # too little of is refused before a lone accidental match can be read as full coverage.
         known = sum(len(f["matched"]) + len(f["missing"]) for f in best[3])
         typed = known + sum(len(f["unknown"]) for f in best[3])
         if known < PROFILE_KNOWN_MIN * typed or (best[2] <= 0 and best[1] < PROFILE_DENSE_ONLY):
@@ -526,9 +478,6 @@ class JobQAEngine:
         return {"mode": "profile_match", "intent": "profile", "answer": ans,
                 "job": matches[0]["job_title"], "matches": matches}
 
-    # Each vocabulary field's phrases across the records this caller may see, most common first —
-    # what advanced analysis offers while typing, so a person picks «سخن گفتن» rather than describing
-    # the same skill in words no record holds, and the item then counts toward coverage.
     def vocabulary(self, scope=None):
         mask = self._mask(scope)
         rows = self.df if mask is None else self.df[mask]
@@ -554,7 +503,6 @@ class JobQAEngine:
         if is_greeting(q):
             return {"mode": "about", "intent": "greeting", "answer": GREETING_MESSAGE}
 
-        # «X چیست؟» is X asked for by name: answered as the name is, from the same retrieval.
         subject = definition_subject(q)
         if subject:
             question, q = subject, subject
@@ -575,14 +523,6 @@ class JobQAEngine:
         i1 = order[0]
         s1_dense, s1_sparse = float(dense[i1]), float(sparse[i1])
 
-        # Every bare name goes to `_discover`, whether or not `names_an_occupation` can see
-        # an occupation in it. That test misses 17% of the corpus's own aliases — «رمال»,
-        # «فالگیر», «بقال», «مورخ» carry no agent-noun head and no agentive suffix it knows —
-        # and a miss did not merely skip the composing path, it dropped the input onto the
-        # question path's stricter gate, where «رمال» (dense 0.41) was refused outright with
-        # no call made at all. `_discover` re-checks `DISCOVERY_FLOOR` itself, so nothing
-        # below the floor costs a call either way, and above it the prompt's `not_a_job`
-        # branch is the realism check — a better one than any suffix list.
         if bare_name:
             return self._discover(
                 question, q, use_llm, (order, dense, sparse),
@@ -598,9 +538,6 @@ class JobQAEngine:
                    if float(self.emb_full[i1] @ self.emb_full[c]) < PAIR_SIM_MAX), None)
         s2_dense = float(dense[i2]) if i2 is not None else None
 
-        # An explicit combination is answered from a record for each half, and only when the
-        # question really does name two fields — otherwise the combining word is just a
-        # word, as in «داروهای ترکیبی» or «خدمات مشترکین», and the question is a normal one.
         if any(k in q for k in EXPLICIT_COMBO_WORDS):
             pair = self._combination_pair(q, i1, i2, mask)
             if pair:
@@ -625,21 +562,12 @@ class JobQAEngine:
             ans = self._adapted_answer(question, resolved, use_llm)
             if not ans:
                 ans = template_one(resolved, fields)
-            # The composed record rides along as `job_draft` too, so the client can offer it
-            # for filing — the boxes answer the question, the draft is what gets submitted.
             return {"mode": "job_adapted", "intent": intent,
                     "job": resolved["job_title"], "answer": ans,
                     "related_jobs": self._related_titles(order),
                     "nearest": self._nearest_detail(order, fields),
                     "details": [job_detail(resolved, fields)], "job_draft": resolved}
 
-        # Two records within SECONDARY_MARGIN of each other used to be answered as a
-        # combination *before* the resolve step, which is where a job named in one breath
-        # went: «وظایف پرستار اورژانس هوایی چیست؟» came back as «پرستاران» plus the paramedics,
-        # the aviation half missing, while the same title typed bare composed a record that
-        # covered both. One job named is one job, so the tie is now only the fallback for
-        # when there is no reading to go on — an outage, or use_llm=False, whose routing and
-        # therefore `eval_engine` it leaves exactly as it was.
         if (resolved is None and i2 is not None and s2_dense >= SECONDARY_MIN
                 and abs(s1_dense - s2_dense) <= SECONDARY_MARGIN):
             return self._combined(question, intent, fields, (i1, i2), use_llm)

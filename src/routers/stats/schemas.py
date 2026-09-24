@@ -11,8 +11,6 @@ class RoleCount(BaseModel):
     count: int
 
 
-# Approved records per organization — the private corpora, one bar each. The public
-# corpus belongs to no organization and is `JobStats.public_records` instead.
 class OrganizationCount(BaseModel):
     organization_id: int
     name: str

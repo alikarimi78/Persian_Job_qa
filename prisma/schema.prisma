@@ -84,8 +84,6 @@ model JobRecord {
   responsibilities String @default("") @db.Text
 
   status JobStatus @default(pending)
-  // NULL is the public corpus: a record every organization searches. A row that names
-  // an organization is searchable only by that organization's accounts.
   organization_id Int?
   suggested_by Int?
   reviewed_by  Int?

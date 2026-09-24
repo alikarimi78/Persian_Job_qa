@@ -13,18 +13,11 @@ from .schemas import RebuildStatus
 from .service import (JOBS_PAGE_MAX, JOBS_PAGE_SIZE, approved, matching_ids,
                       organization_filter, pending, review, target_owner, update_data)
 
-# Moderation is the super admin's, with one opening: an org_admin runs their own
-# organization's records — the ones only that organization searches. The public corpus,
-# which every organization reads, stays the super admin's alone; both checks live in
-# `permissions.assert_can_admit_job`, which every write below goes through.
 any_admin = require_roles(Role.super_admin, Role.org_admin)
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(any_admin)])
 
 
-# Who the record will belong to once this write lands, checked before it does: a
-# super_admin may hand it to any organization or to nobody, an org_admin only ever to
-# their own.
 def _owner(db: Prisma, actor: User, body: JobIn, record: JobRecord | None = None) -> int | None:
     organization_id = (body.organization_id if record is None
                        else target_owner(body, record))
@@ -43,9 +36,6 @@ def list_suggestions(job_status: JobStatus = JobStatus.pending,
                **organization_filter(actor, organization_id, public)})
 
 
-# The third review action: the reviewer corrects the record before deciding, rather
-# than rejecting it over one column. The correction may move it between the public
-# corpus and an organization, which is a decision about who will ever see it.
 @router.put("/suggestions/{job_id}", response_model=JobOut)
 def edit_suggestion(job_id: int, body: JobIn, actor: User = Depends(any_admin),
                     db: Prisma = Depends(get_db)):
@@ -54,9 +44,6 @@ def edit_suggestion(job_id: int, body: JobIn, actor: User = Depends(any_admin),
     return db.jobrecord.update(where={"id": job_id}, data=update_data(body, owner))
 
 
-# The rebuild is started after `review` has written the row: Prisma commits each write
-# on its own and the rebuild re-queries, so that ordering is what makes the record
-# visible to the next search.
 @router.post("/suggestions/{job_id}/approve", response_model=JobOut)
 def approve(job_id: int, admin: User = Depends(any_admin), db: Prisma = Depends(get_db)):
     record = review(db, job_id, JobStatus.approved, admin)
@@ -78,10 +65,6 @@ def create_job(body: JobIn, admin: User = Depends(any_admin), db: Prisma = Depen
     return record
 
 
-# `page`/`page_size` are clamped rather than validated — a 422 here is enough to take
-# the admin panel down. An org_admin reads what their organization's searches reach —
-# the public corpus beside their own records — while the writes below still let them
-# change their own alone.
 @router.get("/jobs", response_model=JobPage)
 def list_jobs(q: str = "", page: int = 1, page_size: int = JOBS_PAGE_SIZE,
               job_status: JobStatus = JobStatus.approved,
@@ -93,8 +76,6 @@ def list_jobs(q: str = "", page: int = 1, page_size: int = JOBS_PAGE_SIZE,
     where: dict = {"status": job_status,
                    **organization_filter(actor, organization_id, public, reach)}
 
-    # A searched listing is paged over the ids the fold matched, in the same order the database would
-    # have returned them; an unsearched one is paged by the database itself.
     if q.strip():
         ids = matching_ids(db, where, q)
         total = len(ids)
@@ -108,8 +89,6 @@ def list_jobs(q: str = "", page: int = 1, page_size: int = JOBS_PAGE_SIZE,
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-# `reviewed_by` is left alone: it records who admitted the record, and an edit is not a
-# second admission.
 @router.put("/jobs/{job_id}", response_model=JobOut)
 def edit_job(job_id: int, body: JobIn, actor: User = Depends(any_admin),
              db: Prisma = Depends(get_db)):
@@ -120,11 +99,6 @@ def edit_job(job_id: int, body: JobIn, actor: User = Depends(any_admin),
     return record
 
 
-# Deleting is the fourth write a search can see, so it starts the rebuild the way the other
-# three do: after the row is gone, the rebuild re-querying what is left. It goes through
-# the same guard as an edit — a record in the corpus only, an org_admin reaching their own
-# organization's records and never a public one — and a pending suggestion is rejected,
-# not deleted.
 @router.delete("/jobs/{job_id}", status_code=204)
 def delete_job(job_id: int, actor: User = Depends(any_admin), db: Prisma = Depends(get_db)):
     approved(db, job_id, actor)
@@ -132,9 +106,6 @@ def delete_job(job_id: int, actor: User = Depends(any_admin), db: Prisma = Depen
     manager.rebuild_async()
 
 
-# A whole re-encode is a GPU hour and every organization's search rides on it, so the
-# button stays the super admin's; an org_admin's own writes start their rebuild by
-# themselves, and the status is readable by both so the panel can report one.
 @router.post("/rebuild", status_code=202, dependencies=[Depends(require_super_admin)])
 def rebuild(force_embeddings: bool = False):
     if not manager.rebuild_async(force_embeddings=force_embeddings):

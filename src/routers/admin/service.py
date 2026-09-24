@@ -21,10 +21,6 @@ def _record(db: Prisma, job_id: int, actor: User) -> JobRecord:
     return record
 
 
-# `pending` guards a record no search can reach yet and `approved` guards the corpus
-# everyone searches; each answers 409 for the other's records, which is why the two
-# edit endpoints are deliberately not one widened endpoint. Both go through the reach
-# check first, so no /admin path can act on another organization's record.
 def pending(db: Prisma, job_id: int, actor: User) -> JobRecord:
     record = _record(db, job_id, actor)
     if record.status != JobStatus.pending:
@@ -48,18 +44,11 @@ def review(db: Prisma, job_id: int, new_status: JobStatus, admin: User) -> JobRe
         data={"status": new_status, "reviewer": {"connect": {"id": admin.id}}})
 
 
-# An edit that does not mention the owner leaves it alone, an explicit null returns the
-# record to the public corpus — the same rule `OrganizationUpdateIn` follows, and here it
-# is what stops a client that predates the column from handing one organization's record
-# to every other by saving an unrelated column.
 def target_owner(body: JobIn, record: JobRecord) -> int | None:
     return (body.organization_id if "organization_id" in body.model_fields_set
             else record.organization_id)
 
 
-# `prisma generate` leaves the foreign key out of an update input, so a change of owner
-# travels as the relation: connect names an organization, disconnect returns the record
-# to the public corpus. A create takes the plain `organization_id` and needs none of it.
 def update_data(body: JobIn, organization_id: int | None) -> dict:
     data = body.model_dump()
     data.pop("organization_id")
@@ -68,11 +57,6 @@ def update_data(body: JobIn, organization_id: int | None) -> dict:
     return data
 
 
-# What this admin may list, and the filter asked for on top of it. A super_admin sees
-# every record and may narrow to a single organization, or to the public corpus, which
-# `organization_id` alone cannot name — it is the absence of one. An org_admin is
-# confined to `reach`: by default their own organization's records, the ones they
-# decide; a listing they may read beyond what they decide passes a wider one.
 def organization_filter(actor: User, organization_id: int | None, public: bool,
                         reach: set[int | None] | None = None) -> JobRecordWhereInput:
     if public and organization_id is not None:
@@ -91,10 +75,6 @@ def organization_filter(actor: User, organization_id: int | None, public: bool,
     return scope if not asked else {"AND": [scope, asked]}
 
 
-# Two spellings read as one, the folding the client's `utils/text.js` does: Arabic letter forms and
-# hamza onto their Persian spellings, the marks dropped, a half-space read as a space, case ignored.
-# The corpus is hazm-normalized and holds no Arabic ي/ك, but it does hold «مسئول» and «تأسیسات», so
-# **both sides are folded** — folding the query alone would lose exactly those.
 _FOLD = str.maketrans({"ي": "ی", "ى": "ی", "ك": "ک", "ؤ": "و", "ئ": "ی", "أ": "ا", "إ": "ا",
                        "ٱ": "ا", "ة": "ه", "ۀ": "ه", _ZWNJ: " ",
                        **{chr(mark): None for mark in range(0x064B, 0x0671)}})
@@ -104,9 +84,6 @@ def fold_title(text: str) -> str:
     return " ".join(str(text or "").lower().translate(_FOLD).split())
 
 
-# `contains` matches what is stored, byte for byte, so the folded search cannot be a database filter:
-# every title the caller may reach is read instead — its id and title alone (`JobTitleRow`), the corpus
-# being ~1120 of them — and compared in Python. The page itself is then fetched whole, by id.
 def matching_ids(db: Prisma, where: JobRecordWhereInput, query: str) -> list[int]:
     folded = fold_title(query)
     rows = JobTitleRow.prisma(db).find_many(where=where, order={"job_title": "asc"})

@@ -13,9 +13,6 @@ from .schemas import ReportIn
 router = APIRouter(prefix="/reports", tags=["reports"])
 
 
-# The client posts back the answer it already holds and the server does not re-run the
-# search, the model not being deterministic. Identity is never taken from the body —
-# the masthead's user and organization come from the token.
 @router.post(
     "/search",
     response_class=Response,
