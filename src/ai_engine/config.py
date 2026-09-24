@@ -37,7 +37,7 @@ PREVIEW_ITEMS = 5
 SELECT_MAX_TOKENS = 300
 RESOLVE_MAX_TOKENS = 1500
 DRAFT_MAX_ITEMS = {"aliases": 4, "tools": 8, "skills": 8, "knowledge": 7, "abilities": 7,
-                   "responsibilities": 9, "work_context": 7, "career_path_next": 4}
+                   "responsibilities": 9, "work_context": 7, "career_path_next": 2}
 ADAPTED_MAX_TOKENS = 700
 
 PROFILE_TOP_N        = 5
